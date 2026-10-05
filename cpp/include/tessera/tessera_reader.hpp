@@ -698,6 +698,11 @@ template <class D, bool Once> bool verify_table(Verifier& v, const std::uint8_t*
         const std::uint32_t word = load32(p + 4 * w);
         if ((word & masks.reserved[w]) != 0 || ((word >> 1) & ~word & masks.bool_present[w]) != 0) return v.fail(Error::ReservedBits);
     }
+    if constexpr (is_map<D>::value) {
+        // A dictionary stores both vectors: readers locate them without testing the presence bits.
+        constexpr std::uint32_t both = (1u << std::get<S::keys>(S::fields).bit) | (1u << std::get<S::values>(S::fields).bit);
+        if ((load32(p) & both) != both) return v.fail(Error::BadOffset);
+    }
     constexpr std::uint32_t C = static_cast<std::uint32_t>(std::size(S::cells)) - 1;
     if (!v.range(p, cell_offset<S, C>(p))) return false;
     constexpr std::size_t N = std::tuple_size_v<std::remove_cvref_t<decltype(S::fields)>>;
@@ -815,6 +820,316 @@ private:
     const SchemaView& s_;
 };
 
+// ---------------------------------------------------------------- translation (buffers written with another schema)
+
+/// Writes a buffer back to front, like the .NET writer: an item's position is its distance from the end, and padding
+/// puts a chosen point of each item on its alignment in the finished buffer (which is 8-aligned at both ends).
+class Builder {
+public:
+    /// Reserves `size` bytes in front of everything written so far, padded so that the point `align_at` bytes before the
+    /// item's end lands on a multiple of `align`. Returns the item's first byte; position() is the item's position.
+    std::uint8_t* reserve(std::size_t size, std::size_t align, std::size_t align_at) {
+        const std::size_t pad = (std::size_t{0} - (position() + align_at)) & (align - 1);
+        const std::size_t need = pad + size;
+        if (head_ < need) grow(need);
+        head_ -= need;
+        if (pad != 0) std::memset(buf_.get() + head_ + size, 0, pad);
+        return buf_.get() + head_;
+    }
+
+    [[nodiscard]] std::size_t position() const noexcept { return cap_ - head_; }
+
+    /// Moves the bytes into 8-aligned storage and returns it; `root_ptr` receives the address of position `root`.
+    std::shared_ptr<const std::uint64_t[]> finish(std::size_t root, const std::uint8_t*& root_ptr) {
+        const std::size_t used = position(), words = (used + 7) / 8;
+        std::shared_ptr<std::uint64_t[]> storage(new std::uint64_t[words == 0 ? 1 : words]());
+        std::uint8_t* end = reinterpret_cast<std::uint8_t*>(storage.get()) + 8 * words;
+        if (used != 0) std::memcpy(end - used, buf_.get() + head_, used);
+        root_ptr = end - root;
+        return storage;
+    }
+
+private:
+    void grow(std::size_t need) {
+        const std::size_t used = position();
+        const std::size_t cap = std::max<std::size_t>(2 * cap_, used + need + 256);
+        std::unique_ptr<std::uint8_t[]> next(new std::uint8_t[cap]);
+        if (used != 0) std::memcpy(next.get() + cap - used, buf_.get() + head_, used);
+        buf_ = std::move(next);
+        head_ = cap - used;
+        cap_ = cap;
+    }
+
+    std::unique_ptr<std::uint8_t[]> buf_;
+    std::size_t cap_ = 0, head_ = 0;
+};
+
+/// Rewrites a verified buffer written with another schema version in the reader's layout, so that views read every
+/// buffer with compile-time positions. The source is read through its bindings (nullptr: a subtree whose layout is the
+/// reader's). Members the writer lacks are absent (fixed cells get their default); members the reader lacks are
+/// dropped; union members of a type the reader does not know keep their tag and lose their table. Items referenced from
+/// several places are translated once, so sharing (and the buffer's size) is kept.
+class Translator {
+public:
+    explicit Translator(Builder& out) : out_(out) {}
+
+    std::size_t table(const TypeInfo& r, const std::uint8_t* p, const Binding* b) {
+        const Key key{p, &r};
+        if (const auto it = memo_.find(key); it != memo_.end()) return it->second;
+        const Layout& L = layout(r);
+        const std::uint32_t n = r.field_count;
+        std::vector<const std::uint8_t*> src(n, nullptr);  // source cell per field (nullptr: absent)
+        std::vector<std::size_t> child(n, 0);              // position of the translated target (0: none)
+        std::vector<std::uint32_t> extra(n, 0);            // union tags; bools' two bits
+        for (std::uint32_t i = 0; i < n; ++i) {
+            const FieldInfo& f = r.fields[i];
+            if (f.kind == Kind::Bool) {
+                extra[i] = b ? slow_bool(p, b, i) : (load32(p + 4u * (f.bit / 32u)) >> (f.bit % 32u)) & 3u;
+                continue;
+            }
+            const std::uint8_t* cell = b ? slow_cell(p, b, i) : exact_cell(r, p, f);
+            src[i] = cell;
+            if (cell == nullptr) continue;
+            const Binding* cb = b ? b->fields[i].child : nullptr;
+            switch (f.kind) {
+                case Kind::String: child[i] = string(cell + load32(cell)); break;
+                case Kind::Object: child[i] = table(f.child(), cell + load32(cell), cb); break;
+                case Kind::Vector: child[i] = vector(f.child(), cell + load32(cell), cb); break;
+                case Kind::SharedStruct: child[i] = bytes(cell + load32(cell), f.struct_size, f.struct_align); break;
+                case Kind::Union:
+                    extra[i] = load32(cell);
+                    child[i] = member(f.child(), cb, extra[i], cell + 4 + load32(cell + 4));
+                    break;
+                default: break;  // scalars and inline structs are copied below
+            }
+        }
+
+        if (r.map) {
+            // A dictionary always stores both vectors (readers locate them without the presence bits): one the source
+            // lacks, or holds in a layout the reader cannot read, becomes an empty vector.
+            for (std::uint32_t i = 0; i < n; ++i) {
+                if (src[i] != nullptr || r.fields[i].kind != Kind::Vector) continue;
+                child[i] = empty_vector(r.fields[i].child());
+                src[i] = kEmpty;  // present; only child[i] is written
+            }
+        }
+
+        std::size_t cells = 0;
+        bool align8 = L.fixed_align8;
+        for (std::uint32_t bit = 0; bit < r.cell_count; ++bit) {
+            if (src[L.cell_field[bit]] == nullptr) continue;
+            cells += r.cells[bit];
+            align8 = align8 || L.cell_align8[bit];
+        }
+        const std::size_t head = 4u * r.words + r.fixed;
+        std::uint8_t* o = out_.reserve(head + cells, align8 ? 8 : 4, r.fixed + cells);
+        const std::size_t pos = out_.position();
+        std::memset(o, 0, head);
+        auto set_bit = [&](std::uint32_t bit) {
+            std::uint8_t* w = o + 4u * (bit / 32u);
+            store32(w, load32(w) | (1u << (bit % 32u)));
+        };
+        std::size_t c = head;
+        for (std::uint32_t bit = 0; bit < r.cell_count; ++bit) {
+            const std::uint32_t i = L.cell_field[bit];
+            if (src[i] == nullptr) continue;
+            set_bit(bit);
+            const FieldInfo& f = r.fields[i];
+            switch (f.kind) {
+                case Kind::String: case Kind::Object: case Kind::Vector: case Kind::SharedStruct:
+                    store32(o + c, static_cast<std::uint32_t>((pos - c) - child[i]));
+                    break;
+                case Kind::Union:
+                    store32(o + c, extra[i]);
+                    store32(o + c + 4, child[i] != 0 ? static_cast<std::uint32_t>((pos - (c + 4)) - child[i]) : 0u);
+                    break;
+                default:
+                    std::memcpy(o + c, src[i], r.cells[bit]);
+                    break;
+            }
+            c += r.cells[bit];
+        }
+        for (std::uint32_t i = 0; i < n; ++i) {
+            const FieldInfo& f = r.fields[i];
+            if (f.kind == Kind::Bool) {
+                if (extra[i] & 1u) set_bit(f.bit);
+                if (extra[i] & 2u) set_bit(f.bit + 1u);
+            } else if (f.bit >= kFixedBit) {
+                std::uint8_t* cell = o + 4u * r.words + (f.bit - kFixedBit);
+                if (src[i] != nullptr) std::memcpy(cell, src[i], f.cell);
+                else if (f.kind != Kind::Struct) std::memcpy(cell, &f.def, f.cell);  // little-endian: the low bytes
+            }
+        }
+        memo_.emplace(key, pos);
+        return pos;
+    }
+
+private:
+    struct Key {
+        const void* item;
+        const void* type;
+        bool operator==(const Key& k) const noexcept { return item == k.item && type == k.type; }
+    };
+    struct KeyHash {
+        std::size_t operator()(const Key& k) const noexcept {
+            const auto a = reinterpret_cast<std::uintptr_t>(k.item), t = reinterpret_cast<std::uintptr_t>(k.type);
+            return static_cast<std::size_t>((a * 0x9E3779B97F4A7C15ull) ^ (t * 0xC2B2AE3D27D4EB4Full));
+        }
+    };
+
+    /// Per object type: the field of each presence bit, which cells need 8-byte alignment, and whether a fixed cell does.
+    struct Layout {
+        std::vector<std::uint32_t> cell_field;
+        std::vector<bool> cell_align8;
+        bool fixed_align8 = false;
+    };
+
+    static bool align8(const FieldInfo& f) noexcept {
+        if (f.kind == Kind::Struct) return f.struct_align >= 8;
+        return f.kind == Kind::Int64 || f.kind == Kind::UInt64 || f.kind == Kind::Float64;
+    }
+
+    const Layout& layout(const TypeInfo& r) {
+        if (const auto it = layouts_.find(&r); it != layouts_.end()) return it->second;
+        Layout L;
+        L.cell_field.assign(r.cell_count, 0);
+        L.cell_align8.assign(r.cell_count, false);
+        for (std::uint32_t i = 0; i < r.field_count; ++i) {
+            const FieldInfo& f = r.fields[i];
+            if (f.kind == Kind::Bool) continue;
+            if (f.bit >= kFixedBit) {
+                L.fixed_align8 = L.fixed_align8 || align8(f);
+            } else {
+                L.cell_field[f.bit] = i;
+                L.cell_align8[f.bit] = align8(f);
+            }
+        }
+        return layouts_.emplace(&r, std::move(L)).first->second;
+    }
+
+    /// Cell of field f in a table laid out as the reader's type r (a subtree whose layout did not change).
+    static const std::uint8_t* exact_cell(const TypeInfo& r, const std::uint8_t* p, const FieldInfo& f) noexcept {
+        if (f.bit >= kFixedBit) return p + 4u * r.words + (f.bit - kFixedBit);
+        if (!((load32(p + 4u * (f.bit / 32u)) >> (f.bit % 32u)) & 1u)) return nullptr;
+        std::uint32_t off = 4u * r.words + r.fixed;
+        for (std::uint32_t j = 0; j < f.bit; ++j)
+            if ((load32(p + 4u * (j / 32u)) >> (j % 32u)) & 1u) off += r.cells[j];
+        return p + off;
+    }
+
+    static void store32(std::uint8_t* p, std::uint32_t v) noexcept { std::memcpy(p, &v, 4); }
+
+    std::size_t string(const std::uint8_t* s) {
+        const Key key{s, nullptr};
+        if (const auto it = memo_.find(key); it != memo_.end()) return it->second;
+        const std::size_t size = 4u + load32(s) + 1u;
+        std::memcpy(out_.reserve(size, 4, size), s, size);
+        const std::size_t pos = out_.position();
+        memo_.emplace(key, pos);
+        return pos;
+    }
+
+    /// A shared struct's bytes.
+    std::size_t bytes(const std::uint8_t* s, std::uint32_t size, std::uint32_t align) {
+        const Key key{s, &kSharedKey};
+        if (const auto it = memo_.find(key); it != memo_.end()) return it->second;
+        std::memcpy(out_.reserve(size, std::max<std::uint32_t>(4, align), size), s, size);
+        const std::size_t pos = out_.position();
+        memo_.emplace(key, pos);
+        return pos;
+    }
+
+    /// The table of a union value with `tag`, or 0 when the reader does not know the tag's type (or cannot read it).
+    std::size_t member(const TypeInfo& u, const Binding* ub, std::uint32_t tag, const std::uint8_t* target) {
+        for (std::uint32_t k = 0; k < u.member_count; ++k) {
+            if (u.tags[k] != tag) continue;
+            const Binding* mb = nullptr;
+            if (ub != nullptr) {
+                const auto it = std::find_if(ub->members.begin(), ub->members.end(), [&](const auto& m) { return m.first == tag; });
+                if (it == ub->members.end() || it->second == kIncompatible) return 0;
+                mb = it->second;
+            }
+            return table(u.members[k](), target, mb);
+        }
+        return 0;
+    }
+
+    /// An empty vector of type r, aligned as vector() aligns one.
+    std::size_t empty_vector(const TypeInfo& r) {
+        const Kind k = r.elem_kind;
+        const std::size_t es = k == Kind::Bool ? 1u : r.elem_size;
+        const std::size_t ea = k == Kind::Struct ? r.elem_struct_align : (k == Kind::Bool ? 1u : es);
+        const std::size_t align = r.elem_optional || !is_ref_kind(k) ? std::max<std::size_t>(4, ea) : 4u;
+        store32(out_.reserve(4, align, 0), 0);
+        return out_.position();
+    }
+
+    std::size_t vector(const TypeInfo& r, const std::uint8_t* t, const Binding* b) {
+        const Key key{t, &r};
+        if (const auto it = memo_.find(key); it != memo_.end()) return it->second;
+        const std::uint32_t n = load32(t);
+        const Kind k = r.elem_kind;
+        const Binding* eb = b ? b->element : nullptr;
+        const std::size_t es = k == Kind::Bool ? 1u : r.elem_size;
+        const std::size_t ea = k == Kind::Struct ? r.elem_struct_align : (k == Kind::Bool ? 1u : es);
+        std::size_t pos;
+        if (r.elem_optional || !is_ref_kind(k)) {
+            // Scalars, bools, inline structs and optional values: the same bytes in both layouts.
+            const std::size_t presence = r.elem_optional ? 4u * ((std::size_t{n} + 31) / 32) : 0u;
+            const std::size_t values = std::size_t{n} * es;
+            std::memcpy(out_.reserve(4 + presence + values, std::max<std::size_t>(4, ea), values), t, 4 + presence + values);
+            pos = out_.position();
+        } else if (k == Kind::Union) {
+            std::vector<std::uint32_t> tags(n, 0);
+            std::vector<std::size_t> kids(n, 0);
+            for (std::uint32_t i = 0; i < n; ++i) {
+                const std::uint8_t* slot = t + 4 + std::size_t{i} * 8;
+                const std::uint32_t off = load32(slot + 4);
+                if (off == 0) continue;
+                tags[i] = load32(slot);
+                kids[i] = member(r.elem(), eb, tags[i], slot + 4 + off);
+            }
+            std::uint8_t* d = out_.reserve(4 + std::size_t{n} * 8, 4, std::size_t{n} * 8);
+            pos = out_.position();
+            store32(d, n);
+            for (std::uint32_t i = 0; i < n; ++i) {
+                const std::size_t slot = pos - 8 - 8 * std::size_t{i};
+                store32(d + 4 + 8 * std::size_t{i}, tags[i]);
+                store32(d + 8 + 8 * std::size_t{i}, kids[i] != 0 ? static_cast<std::uint32_t>(slot - kids[i]) : 0u);
+            }
+        } else {
+            std::vector<std::size_t> kids(n, 0);
+            for (std::uint32_t i = 0; i < n; ++i) {
+                const std::uint8_t* slot = t + 4 + std::size_t{i} * 4;
+                const std::uint32_t off = load32(slot);
+                if (off == 0) continue;
+                const std::uint8_t* target = slot + off;
+                switch (k) {
+                    case Kind::String: kids[i] = string(target); break;
+                    case Kind::Object: kids[i] = table(r.elem(), target, eb); break;
+                    case Kind::Vector: kids[i] = vector(r.elem(), target, eb); break;
+                    default: kids[i] = bytes(target, r.elem_struct_size, r.elem_struct_align); break;  // SharedStruct
+                }
+            }
+            std::uint8_t* d = out_.reserve(4 + std::size_t{n} * 4, 4, std::size_t{n} * 4);
+            pos = out_.position();
+            store32(d, n);
+            for (std::uint32_t i = 0; i < n; ++i) {
+                const std::size_t slot = pos - 4 - 4 * std::size_t{i};
+                store32(d + 4 + 4 * std::size_t{i}, kids[i] != 0 ? static_cast<std::uint32_t>(slot - kids[i]) : 0u);
+            }
+        }
+        memo_.emplace(key, pos);
+        return pos;
+    }
+
+    static inline const char kSharedKey = 0;
+
+    Builder& out_;
+    std::unordered_map<Key, std::size_t, KeyHash> memo_;
+    std::unordered_map<const TypeInfo*, Layout> layouts_;
+};
+
 /// Checks the 16-byte header; returns the root pointer or nullptr.
 inline const std::uint8_t* check_header(const std::uint8_t* d, std::size_t size, Error& err) noexcept {
     if (d == nullptr || size < 16) { err = Error::TooSmall; return nullptr; }
@@ -832,71 +1147,88 @@ inline const std::uint8_t* check_header(const std::uint8_t* d, std::size_t size,
 
 // ---------------------------------------------------------------- Reader
 
-/// Opens a buffer for reading. Cheap to create when the buffer was written with the same schema as the generated header;
-/// otherwise the embedded schema is matched field by field once, and views use that binding. Views must not outlive the
-/// Reader (or the buffer).
+namespace detail {
+struct no_translation_t {};  // tessera::verify: verify a buffer of another schema version without translating it
+}
+
+/// Opens a buffer for reading. Cheap to create when the buffer was written with the same schema as the generated header:
+/// views then read the buffer in place. A buffer written with another schema version is matched field by field (by
+/// name), verified against its own schema, and translated once into this schema's layout, in memory the Reader owns, so
+/// views read it with the same compile-time positions. Views must not outlive the Reader (or the buffer).
 template <class Root> class Reader {
 public:
     Reader() noexcept = default;
 
-    Reader(const void* data, std::size_t size, const Options& options = {}) { open(static_cast<const std::uint8_t*>(data), size, options); }
+    Reader(const void* data, std::size_t size, const Options& options = {}) { open(static_cast<const std::uint8_t*>(data), size, options, true); }
+
+    /// For tessera::verify: checks a buffer without translating it.
+    Reader(const void* data, std::size_t size, const Options& options, detail::no_translation_t) {
+        open(static_cast<const std::uint8_t*>(data), size, options, false);
+    }
 
     explicit operator bool() const noexcept { return error_ == Error::None; }
     [[nodiscard]] Error error() const noexcept { return error_; }
 
     /// The root table (an absent view if opening failed).
-    [[nodiscard]] Root root() const noexcept { return error_ == Error::None ? Root(root_, binding_) : Root(); }
+    [[nodiscard]] Root root() const noexcept { return error_ == Error::None ? Root(root_) : Root(); }
 
-    /// True when the buffer was written with exactly this schema (all accesses use compile-time positions).
-    [[nodiscard]] bool exact_schema() const noexcept { return state_ == nullptr; }
+    /// True when the buffer was written with exactly this schema (read in place, not translated).
+    [[nodiscard]] bool exact_schema() const noexcept { return exact_; }
 
 private:
-    void open(const std::uint8_t* d, std::size_t size, const Options& options) {
+    void open(const std::uint8_t* d, std::size_t size, const Options& options, bool translate) {
         const std::uint8_t* root = detail::check_header(d, size, error_);
         if (!root) return;
         const std::uint64_t fp = detail::load<std::uint64_t>(d + 8);
+        std::unique_ptr<detail::BindState> state;
+        const detail::Binding* binding = nullptr;
         if (fp != schema<Root>::deep_fingerprint) {
             if (!(d[7] & 1u)) { error_ = Error::SchemaMismatch; return; }
-            auto state = std::make_shared<detail::BindState>();
+            state = std::make_unique<detail::BindState>();
             if (!state->schema.parse(d, size)) { error_ = Error::BadSchema; return; }
             detail::Binder binder(*state);
-            const detail::Binding* b = binder.bind(detail::type_info<Root>(), state->schema.root());
-            if (b == detail::kIncompatible) { error_ = Error::SchemaMismatch; return; }
-            binding_ = b;
-            state_ = std::move(state);
+            binding = binder.bind(detail::type_info<Root>(), state->schema.root());
+            if (binding == detail::kIncompatible) { error_ = Error::SchemaMismatch; return; }
+            exact_ = false;
         }
         if (options.verify) {
             detail::Verifier v(d, size, options);
-            bool ok = !detail::kVerifyOnceAlways && (state_ ? detail::EntryVerifier<>(v, state_->schema).object(state_->schema.root(), root, 0)
-                                                            : detail::verify_table<Root>(v, root, 0));
-            if (!ok && (detail::kVerifyOnceAlways || v.shared())) ok = verify_once(v, root);
+            bool ok = !detail::kVerifyOnceAlways && (state ? detail::EntryVerifier<>(v, state->schema).object(state->schema.root(), root, 0)
+                                                           : detail::verify_table<Root>(v, root, 0));
+            if (!ok && (detail::kVerifyOnceAlways || v.shared())) ok = verify_once(v, root, state.get());
             if (!ok) { error_ = v.error(); return; }
+        }
+        if (binding != nullptr && translate) {
+            // The layouts differ: rewrite the buffer in this schema's layout (a structurally identical buffer needs nothing).
+            detail::Builder out;
+            const std::size_t pos = detail::Translator(out).table(detail::type_info<Root>(), root, binding);
+            storage_ = out.finish(pos, root);
         }
         root_ = root;
     }
 
     /// The buffer shares items: verify each (position, type) once.
-    TESSERA_NOINLINE bool verify_once(detail::Verifier& v, const std::uint8_t* root) const noexcept {
+    static TESSERA_NOINLINE bool verify_once(detail::Verifier& v, const std::uint8_t* root, const detail::BindState* state) noexcept {
         if (!v.start_once()) return false;
-        return state_ ? detail::EntryVerifier<true>(v, state_->schema).object(state_->schema.root(), root, 0) : detail::verify_table<Root, true>(v, root, 0);
+        return state ? detail::EntryVerifier<true>(v, state->schema).object(state->schema.root(), root, 0) : detail::verify_table<Root, true>(v, root, 0);
     }
 
     const std::uint8_t* root_ = detail::kEmpty;
-    const detail::Binding* binding_ = nullptr;
     Error error_ = Error::TooSmall;
-    std::shared_ptr<detail::BindState> state_;
+    bool exact_ = true;
+    std::shared_ptr<const std::uint64_t[]> storage_;  // the translated buffer (another schema version)
 };
 
-/// Verifies a buffer without keeping a Reader.
+/// Verifies a buffer without keeping a Reader (and without translating one of another schema version).
 template <class Root> [[nodiscard]] Error verify(const void* data, std::size_t size, Options options = {}) {
     options.verify = true;
-    return Reader<Root>(data, size, options).error();
+    return Reader<Root>(data, size, options, detail::no_translation_t{}).error();
 }
 
 /// Root view without any checks. Only for trusted buffers written with exactly this schema.
 template <class Root> [[nodiscard]] TESSERA_ALWAYS_INLINE Root root_unchecked(const void* data) noexcept {
     const auto* d = static_cast<const std::uint8_t*>(data);
-    return Root(d + detail::load32(d), nullptr);
+    return Root(d + detail::load32(d));
 }
 
 // ---------------------------------------------------------------- JSON (debugging and cross-language tests)

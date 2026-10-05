@@ -93,8 +93,10 @@ Unused presence bits are zero. The vector's schema entry has flags bit 1 set.
 
 A dictionary is an object with two vector members: `Keys`, in ascending order, and `Values`, in the same order.
 Integer, char and enum keys are ordered by value; string keys by code point, which is the order of their UTF-8
-bytes. The schema describes it like any object, so readers of other versions match `Keys` and `Values` by name. A
-reader finds a key by binary search; a buffer whose keys are not sorted reads safely but finds the wrong values.
+bytes. Both members are always present (an empty dictionary has two empty vectors), so a reader finds them at fixed
+positions without testing their presence bits; verification rejects a dictionary that lacks either. The schema
+describes it like any object, so readers of other versions match `Keys` and `Values` by name. A reader finds a key by
+binary search; a buffer whose keys are not sorted reads safely but finds the wrong values.
 
 ## Unions
 
@@ -161,7 +163,8 @@ All fingerprints use `xxHash64` with seed 0.
 A reader whose compiled deep fingerprint equals the buffer's uses compile-time positions throughout. Otherwise it
 binds its schema against the buffer's schema section: members are matched by name hash and must have the same kind
 (and struct shape). Unmatched members read as absent. The binder compares layouts structurally and never trusts the
-fingerprints stored in the buffer.
+fingerprints stored in the buffer. The C++ reader then translates the buffer once, when it opens it, into a copy in
+its own layout, so that every read still uses compile-time positions.
 
 ## Verification
 
@@ -173,6 +176,7 @@ fingerprints stored in the buffer.
 - **Offsets:** non-zero where required, forward, in bounds and aligned to their target's alignment.
 - **Strings and vectors:** lengths fit the buffer; strings are zero-terminated, and valid UTF-8 if `Options::utf8`.
 - **Union tags:** belong to the union.
+- **Dictionaries:** both vectors are present.
 - **Limits:** nesting at most `max_depth` levels (each object and each vector is one level), and at most
   `max_items` objects and vectors visited.
 

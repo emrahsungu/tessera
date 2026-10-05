@@ -20,7 +20,11 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
 #include <vector>
 
 #if defined(_MSC_VER) && !defined(__clang__)
@@ -63,7 +67,7 @@ enum class Error : std::uint8_t {
     SchemaMismatch,  // fingerprint differs and the buffer carries no schema
     BadSchema,       // schema section malformed
     OutOfBounds,     // an item extends past the end of the buffer
-    BadOffset,       // an offset is zero, backward or misaligned
+    BadOffset,       // an offset is zero, backward or misaligned, or a dictionary lacks its keys or values
     BadString,       // missing terminator or invalid UTF-8
     BadUnionTag,     // union tag not declared by the schema
     ReservedBits,    // header bits that must be zero are set
@@ -110,6 +114,7 @@ struct none_t {};
 class TableBase;
 class UnionBase;
 template <class T> class Vector;
+template <class K, class V> class Map;
 
 namespace detail {
 
@@ -238,6 +243,8 @@ struct FieldInfo {
     std::uint64_t struct_fp;     // struct fingerprint for Struct/SharedStruct kinds
     std::uint32_t struct_size;   // sizeof the struct for Struct/SharedStruct kinds
     TypeInfoFn child;            // objects, vectors, unions
+    std::uint32_t struct_align;  // alignof the struct for Struct/SharedStruct kinds
+    std::uint64_t def;           // scalars: the default's bit pattern (written for fixed cells a translated buffer lacks)
 };
 
 struct TypeInfo {
@@ -252,12 +259,14 @@ struct TypeInfo {
     const FieldInfo* fields = nullptr;
     std::uint32_t field_count = 0;
     const std::uint16_t* cells = nullptr;   // cell sizes in bit order
+    bool map = false;                       // a dictionary: both of its vectors are always stored
     // vectors
     Kind elem_kind = Kind::Invalid;
     bool elem_optional = false;             // optional values: presence bits, then every value
     std::uint32_t elem_size = 0;
     std::uint64_t elem_struct_fp = 0;
     std::uint32_t elem_struct_size = 0;
+    std::uint32_t elem_struct_align = 0;
     TypeInfoFn elem = nullptr;
     // unions
     const std::uint32_t* tags = nullptr;
@@ -332,11 +341,21 @@ template <class S, std::uint32_t Bit> consteval auto make_terms() {
     return r;
 }
 
+/// Population count. The instruction directly when the target has it (MSVC's std::popcount is several nested calls
+/// that use up its inlining budget for the caller's own functions).
+[[nodiscard]] TESSERA_ALWAYS_INLINE std::uint32_t popcount32(std::uint32_t x) noexcept {
+#if defined(_MSC_VER) && !defined(__clang__) && (defined(__AVX__) || defined(__AVX2__))
+    return __popcnt(x);
+#else
+    return static_cast<std::uint32_t>(std::popcount(x));
+#endif
+}
+
 template <class S, std::uint32_t Bit, std::size_t K> TESSERA_ALWAYS_INLINE std::uint32_t cell_term(const std::uint8_t* p) noexcept {
     // Locals declared constexpr so every compiler emits the word offset, mask and size as immediates.
     constexpr Term t = make_terms<S, Bit>().t[K];
     constexpr std::uint32_t word = 4u * t.word, mask = t.mask, size = t.size;
-    const auto n = static_cast<std::uint32_t>(std::popcount(load32(p + word) & mask));
+    const std::uint32_t n = popcount32(load32(p + word) & mask);
     if constexpr (size == 1) return n;
     else if constexpr ((size & (size - 1)) == 0) {
         constexpr int shift = std::countr_zero(size);
@@ -347,11 +366,12 @@ template <class S, std::uint32_t Bit, std::size_t K> TESSERA_ALWAYS_INLINE std::
 
 /// Byte offset (from the table start) of the cell of presence bit `Bit`: header and fixed cells, plus the sizes of all
 /// present cells before it, computed with one popcount per run of equal-size cells.
+template <class S, std::uint32_t Bit, std::size_t... K>
+TESSERA_ALWAYS_INLINE std::uint32_t cell_offset_terms([[maybe_unused]] const std::uint8_t* p, std::index_sequence<K...>) noexcept {
+    return 4u * S::words + S::fixed + (0u + ... + cell_term<S, Bit, K>(p));
+}
 template <class S, std::uint32_t Bit> TESSERA_ALWAYS_INLINE std::uint32_t cell_offset(const std::uint8_t* p) noexcept {
-    constexpr std::size_t n = term_count<S>(Bit);
-    return [&]<std::size_t... K>(std::index_sequence<K...>) noexcept {
-        return 4u * S::words + S::fixed + (0u + ... + cell_term<S, Bit, K>(p));
-    }(std::make_index_sequence<n>{});
+    return cell_offset_terms<S, Bit>(p, std::make_index_sequence<term_count<S>(Bit)>{});
 }
 
 inline const std::uint8_t* slow_cell(const std::uint8_t* p, const Binding* b, std::size_t i) noexcept {
@@ -374,8 +394,7 @@ inline std::uint32_t slow_bool(const std::uint8_t* p, const Binding* b, std::siz
 
 template <class T, Cat C = category<T>()> struct return_of;
 template <class T> using return_t = typename return_of<T>::type;
-template <class T> return_t<T> read_field(const std::uint8_t* cell, const Binding* child, const typename default_of<T>::type& def) noexcept;
-template <class T> return_t<T> read_present(const std::uint8_t* cell, const Binding* child) noexcept;
+template <class T> return_t<T> read_present(const std::uint8_t* cell) noexcept;
 template <class T> return_t<T> read_absent(const typename default_of<T>::type& def) noexcept;
 
 template <class M> consteval bool member_has_bool();
@@ -432,28 +451,28 @@ template <class T> TESSERA_ALWAYS_INLINE T load_value(const std::uint8_t* p) noe
         return load<T>(p);
     }
 }
-template <class T> return_t<T> read_element(const std::uint8_t* base, std::uint32_t i, const Binding* eb) noexcept;
+template <class T> return_t<T> read_element(const std::uint8_t* base, std::uint32_t i) noexcept;
 
 } // namespace detail
 
 // ---------------------------------------------------------------- tables
 
-/// Base of every generated table view. A view is two pointers; absent tables are views over zero bytes.
+/// Base of every generated table view: a pointer to the table in the buffer, or to zero bytes when the table is absent.
+/// Views always read the layout compiled into the generated header: a buffer written with another schema version is
+/// translated to that layout when a Reader opens it.
 class TableBase {
 public:
     constexpr TableBase() noexcept = default;
-    TableBase(const std::uint8_t* p, const detail::Binding* b) noexcept : p_(p), b_(b) {}
+    TESSERA_MSVC_FORCEINLINE explicit TableBase(const std::uint8_t* p) noexcept : p_(p) {}
 
     /// False when the table is absent.
-    explicit operator bool() const noexcept { return p_ != detail::kEmpty; }
+    TESSERA_MSVC_FORCEINLINE explicit operator bool() const noexcept { return p_ != detail::kEmpty; }
 
     /// Address of the table in the buffer.
     [[nodiscard]] const std::uint8_t* tessera_data() const noexcept { return p_; }
-    [[nodiscard]] const detail::Binding* tessera_binding() const noexcept { return b_; }
 
 protected:
     const std::uint8_t* p_ = detail::kEmpty;
-    const detail::Binding* b_ = nullptr;
 };
 
 /// CRTP helper that implements field access from `tessera::schema<D>`.
@@ -466,9 +485,7 @@ public:
 
     /// Whether field I is present.
     template <std::size_t I> [[nodiscard]] TESSERA_ALWAYS_INLINE bool tessera_has() const noexcept;
-
 };
-
 
 namespace detail {
 
@@ -483,127 +500,190 @@ template <class F> consteval bool zero_default(const F& f) {
     }
 }
 
-/// Reads field I of a table at `p` laid out exactly as schema<D> says (compile-time cell position).
-template <class D, std::size_t I> TESSERA_ALWAYS_INLINE decltype(auto) read_exact(const std::uint8_t* p, const Binding* child) noexcept {
+/// `has ? cell : kEmpty` without a branch, so a compiler can keep a read that repeats in a loop out of the loop (MSVC
+/// turns a plain conditional back into a branch, so it gets the mask form).
+TESSERA_ALWAYS_INLINE const std::uint8_t* select_cell(bool has, const std::uint8_t* cell) noexcept {
+#if defined(_MSC_VER) && !defined(__clang__)
+    const auto e = reinterpret_cast<std::uintptr_t>(kEmpty);
+    const auto m = std::uintptr_t{0} - static_cast<std::uintptr_t>(has);
+    return reinterpret_cast<const std::uint8_t*>(e ^ ((reinterpret_cast<std::uintptr_t>(cell) ^ e) & m));
+#else
+    return has ? cell : kEmpty;
+#endif
+}
+
+template <class T> struct is_map : std::false_type {};
+template <class K, class V> struct is_map<Map<K, V>> : std::true_type {};
+
+#if defined(_MSC_VER) && !defined(__clang__)
+
+/// Unsigned integer of N bytes.
+template <std::size_t N>
+using uint_of = std::conditional_t<N == 1, std::uint8_t, std::conditional_t<N == 2, std::uint16_t, std::conditional_t<N == 4, std::uint32_t, std::uint64_t>>>;
+
+/// MSVC: field of type T in the cell of presence bit Bit, or the absent value. Two MSVC specifics, both measured:
+/// - It keeps a std::optional in memory, written as two stores (value, then flag) and read back whole, which stalls
+///   store forwarding on every read. Built as one integer of the same layout (MSVC's std::optional is {value, flag},
+///   its ABI is fixed), it stays in registers.
+/// - "Absent value, overwritten when present" compiles to one short forward branch. The if/else form leaves values in
+///   registers from earlier reads and costs about twice as much when the presence branch is mispredicted. (Strings
+///   are the exception: their if/else form is faster.)
+template <class T, class S, std::uint32_t Bit>
+TESSERA_ALWAYS_INLINE return_t<T> read_cell(const std::uint8_t* p, bool has, const typename default_of<T>::type& def) noexcept {
+    constexpr Cat k = category<T>();
+    if constexpr (k == Cat::Scalar) {
+        T v = def;
+        if (has) v = load<T>(p + cell_offset<S, Bit>(p));
+        return v;
+    } else if constexpr (k == Cat::Optional) {
+        using V = typename is_optional<T>::inner;
+        if constexpr (is_scalar_v<V> && sizeof(V) <= 4) {
+            using B = uint_of<2 * sizeof(V)>;
+            static_assert(sizeof(T) == sizeof(B) && std::is_trivially_copyable_v<T>);
+            B bits = 0;
+            if (has) bits = static_cast<B>(load<uint_of<sizeof(V)>>(p + cell_offset<S, Bit>(p)) | (B{1} << (8 * sizeof(V))));
+            return __builtin_bit_cast(T, bits);
+        } else if constexpr (is_scalar_v<V>) {
+            struct Raw { std::uint64_t value, has; };
+            static_assert(sizeof(T) == sizeof(Raw) && std::is_trivially_copyable_v<T>);
+            Raw r{0, 0};
+            if (has) r = Raw{load<std::uint64_t>(p + cell_offset<S, Bit>(p)), 1};
+            return __builtin_bit_cast(T, r);
+        } else {
+            // Inline structs: {value, flag}, the flag widened to the struct's alignment.
+            struct Raw { V value; uint_of<alignof(V)> has; };
+            static_assert(sizeof(T) == sizeof(Raw) && std::is_trivially_copyable_v<T>);
+            Raw r{};
+            if (has) r = Raw{load_value<V>(p + cell_offset<S, Bit>(p)), 1};
+            return __builtin_bit_cast(T, r);
+        }
+    } else if constexpr (k == Cat::String) {
+        if (!has) return std::string_view();
+        const std::uint8_t* c = p + cell_offset<S, Bit>(p);
+        return string_at(c + load32(c));
+    } else if constexpr (is_map<T>::value) {
+        // A dictionary is looked up again and again: read without a branch, so a loop can keep the read out of it.
+        const std::uint8_t* c = select_cell(has, p + cell_offset<S, Bit>(p));
+        return T(c + load32(c));
+    } else if constexpr (k == Cat::Vector || k == Cat::Table) {
+        const std::uint8_t* q = kEmpty;
+        if (has) {
+            const std::uint8_t* c = p + cell_offset<S, Bit>(p);
+            q = c + load32(c);
+        }
+        return T(q);
+    } else if constexpr (k == Cat::Union) {
+        const std::uint8_t* q = kEmpty;
+        if (has) q = p + cell_offset<S, Bit>(p);
+        return T(q);
+    } else if constexpr (k == Cat::Shared) {
+        using V = typename is_shared<T>::inner;
+        if constexpr (struct_has_bool<V>()) {
+            V v{};
+            if (has) {
+                const std::uint8_t* c = p + cell_offset<S, Bit>(p);
+                v = load_value<V>(c + load32(c));
+            }
+            return v;
+        } else {
+            const V* q = &kZero<V>;
+            if (has) {
+                const std::uint8_t* c = p + cell_offset<S, Bit>(p);
+                q = reinterpret_cast<const V*>(c + load32(c));
+            }
+            return *q;
+        }
+    } else if constexpr (struct_has_bool<T>()) {
+        T v{};
+        if (has) v = load_value<T>(p + cell_offset<S, Bit>(p));
+        return v;
+    } else {
+        const T* q = &kZero<T>;
+        if (has) q = reinterpret_cast<const T*>(p + cell_offset<S, Bit>(p));
+        return *q;
+    }
+}
+
+#endif
+
+/// Reads field I of the table at `p` (compile-time cell position).
+template <class D, std::size_t I> TESSERA_ALWAYS_INLINE decltype(auto) read_exact(const std::uint8_t* p) noexcept {
     using S = schema<D>;
     constexpr const auto& f = std::get<I>(S::fields);
     using T = typename std::remove_cvref_t<decltype(f)>::type;
     if constexpr (f.bit >= kFixedBit) {
         static_assert(4u * S::words + S::fixed <= sizeof(kEmpty), "an absent table's fixed cells are read from kEmpty");
         const std::uint8_t* cell = p + (4u * S::words + (f.bit - kFixedBit));
-        if constexpr (zero_default(f)) return read_present<T>(cell, child);
-        else return p != kEmpty ? read_present<T>(cell, child) : read_absent<T>(f.def);
+        if constexpr (zero_default(f)) return read_present<T>(cell);
+        else return p != kEmpty ? read_present<T>(cell) : read_absent<T>(f.def);
     } else {
         const std::uint32_t w = load32(p + 4u * (f.bit / 32u)) >> (f.bit % 32u);
         if constexpr (std::is_same_v<T, bool>) {
-            return (w & 1u) ? ((w >> 1) & 1u) != 0 : f.def;
+            // The value bit is set only together with the present bit, so no branch: with a false default the value
+            // bit is the answer; with a true default, "absent or set".
+            if constexpr (f.def) return ((~w | (w >> 1)) & 1u) != 0;
+            else return ((w >> 1) & 1u) != 0;
         } else if constexpr (std::is_same_v<T, std::optional<bool>>) {
+#if defined(_MSC_VER) && !defined(__clang__)
+            static_assert(sizeof(T) == 2);  // one integer, as in read_cell
+            return __builtin_bit_cast(T, static_cast<std::uint16_t>(((w >> 1) & 1u) | ((w & 1u) << 8)));
+#else
             return (w & 1u) ? std::optional<bool>(((w >> 1) & 1u) != 0) : std::optional<bool>();
+#endif
         } else {
-            if (!(w & 1u)) return read_absent<T>(f.def);
-            return read_present<T>(p + cell_offset<S, f.bit>(p), child);
+#if defined(_MSC_VER) && !defined(__clang__)
+            return read_cell<T, S, f.bit>(p, (w & 1u) != 0, f.def);
+#else
+            if constexpr (is_map<T>::value) {
+                // A dictionary is looked up again and again: read without a branch, so a loop can keep the read out of it.
+                const std::uint8_t* c = select_cell((w & 1u) != 0, p + cell_offset<S, f.bit>(p));
+                return T(c + load32(c));
+            } else {
+                // Members are usually present: lay out that path straight (only a hint; the branch is still predicted).
+                if (!(w & 1u)) [[unlikely]] return read_absent<T>(f.def);
+                return read_present<T>(p + cell_offset<S, f.bit>(p));
+            }
+#endif
         }
     }
 }
-
-}  // namespace detail
-
-namespace detail {
-
-// Buffers written with another schema version. Kept out of line, taking the view's pointers by value (not 'this') and
-// returning only a cell pointer or two bits, so the fast path stays small, views stay in registers, and values are never
-// merged through memory.
-template <class D, std::size_t I> TESSERA_NOINLINE const std::uint8_t* bound_cell(const std::uint8_t* p, const Binding* b) noexcept {
-    using S = schema<D>;
-    constexpr const auto& f = std::get<I>(S::fields);
-    if constexpr (f.bit >= kFixedBit) {
-        if (b->own_identical) return p != kEmpty ? p + (4u * S::words + (f.bit - kFixedBit)) : nullptr;
-    } else {
-        if (b->own_identical) return ((load32(p + 4u * (f.bit / 32u)) >> (f.bit % 32u)) & 1u) ? p + cell_offset<S, f.bit>(p) : nullptr;
-    }
-    return slow_cell(p, b, I);
-}
-
-template <class D, std::size_t I> TESSERA_NOINLINE std::uint32_t bound_bits(const std::uint8_t* p, const Binding* b) noexcept {
-    constexpr const auto& f = std::get<I>(schema<D>::fields);
-    if (b->own_identical) return (load32(p + 4u * (f.bit / 32u)) >> (f.bit % 32u)) & 3u;
-    return slow_bool(p, b, I);
-}
-
-template <class D, std::size_t I> TESSERA_NOINLINE bool has_bound(const std::uint8_t* p, const Binding* b) noexcept {
-    constexpr const auto& f = std::get<I>(schema<D>::fields);
-    if constexpr (f.bit >= kFixedBit) {
-        if (b->own_identical) return p != kEmpty;
-    } else {
-        if (b->own_identical) return (load32(p + 4u * (f.bit / 32u)) >> (f.bit % 32u)) & 1u;
-    }
-    const FieldBinding& fb = b->fields[I];
-    if (fb.bit == kFixedBinding) return p != kEmpty;
-    return fb.bit != 0xFFFF && p != kEmpty && ((load32(p + 4u * (fb.bit / 32u)) >> (fb.bit % 32u)) & 1u);
-}
-
 }  // namespace detail
 
 template <class D>
 template <std::size_t I>
 TESSERA_ALWAYS_INLINE decltype(auto) Table<D>::tessera_get() const noexcept {
-    if (b_ == nullptr) [[likely]] return detail::read_exact<D, I>(p_, nullptr);
-    constexpr const auto& f = std::get<I>(schema<D>::fields);
-    using T = typename std::remove_cvref_t<decltype(f)>::type;
-    if constexpr (std::is_same_v<T, bool>) {
-        const std::uint32_t two = detail::bound_bits<D, I>(p_, b_);
-        return (two & 1u) ? (two >> 1) != 0 : f.def;
-    } else if constexpr (std::is_same_v<T, std::optional<bool>>) {
-        const std::uint32_t two = detail::bound_bits<D, I>(p_, b_);
-        return (two & 1u) ? std::optional<bool>((two >> 1) != 0) : std::optional<bool>();
-    } else {
-        return detail::read_field<T>(detail::bound_cell<D, I>(p_, b_), b_->fields[I].child, f.def);
-    }
+    return detail::read_exact<D, I>(p_);
 }
 
 template <class D>
 template <std::size_t I>
 TESSERA_ALWAYS_INLINE bool Table<D>::tessera_has() const noexcept {
     constexpr const auto& f = std::get<I>(schema<D>::fields);
-    if constexpr (f.bit >= kFixedBit) {
-        if (b_ == nullptr) [[likely]] return p_ != detail::kEmpty;  // fixed cells are always stored
-    } else {
-        if (b_ == nullptr) [[likely]] return (detail::load32(p_ + 4u * (f.bit / 32u)) >> (f.bit % 32u)) & 1u;
-    }
-    return detail::has_bound<D, I>(p_, b_);
+    if constexpr (f.bit >= kFixedBit) return p_ != detail::kEmpty;  // fixed cells are always stored
+    else return (detail::load32(p_ + 4u * (f.bit / 32u)) >> (f.bit % 32u)) & 1u;
 }
+
 // ---------------------------------------------------------------- unions
 
-/// Base of generated union views: a type tag plus the selected table.
+/// Base of generated union views: the union's 8-byte cell in the buffer (u32 tag, then the offset to the stored table,
+/// relative to its own position), or zero bytes when absent.
 class UnionBase {
 public:
     constexpr UnionBase() noexcept = default;
-    UnionBase(std::uint32_t tag, const std::uint8_t* p, const detail::Binding* b) noexcept : p_(p), tag_(tag), b_(b) {}
+    TESSERA_MSVC_FORCEINLINE explicit UnionBase(const std::uint8_t* cell) noexcept : cell_(cell) {}
 
     /// Type tag of the stored table (0 when absent).
-    [[nodiscard]] std::uint32_t tag() const noexcept { return tag_; }
-    explicit operator bool() const noexcept { return tag_ != 0; }
+    [[nodiscard]] TESSERA_MSVC_FORCEINLINE std::uint32_t tag() const noexcept { return detail::load32(cell_); }
+    explicit operator bool() const noexcept { return tag() != 0; }
 
     /// The stored table viewed as T, or an absent T if the tag differs.
     template <class T> [[nodiscard]] TESSERA_ALWAYS_INLINE T tessera_as(std::uint32_t tag) const noexcept {
-        if (b_ == nullptr) [[likely]] return T(tag_ == tag ? p_ : detail::kEmpty, nullptr);
-        return as_bound<T>(p_, tag_, b_, tag);
-    }
-
-private:
-    template <class T> static TESSERA_NOINLINE T as_bound(const std::uint8_t* p, std::uint32_t stored, const detail::Binding* b, std::uint32_t tag) noexcept {
-        if (stored != tag) return T{};
-        const detail::Binding* mb = b->member(tag);
-        if (mb == detail::kIncompatible) return T{};
-        return T(p, mb);
+        const std::uint32_t off = detail::load32(cell_ + 4);
+        return T(detail::load32(cell_) == tag && off != 0 ? cell_ + 4 + off : detail::kEmpty);
     }
 
 protected:
-
-protected:
-    const std::uint8_t* p_ = detail::kEmpty;
-    std::uint32_t tag_ = 0;
-    const detail::Binding* b_ = nullptr;
+    const std::uint8_t* cell_ = detail::kEmpty;
 };
 
 // ---------------------------------------------------------------- vectors
@@ -625,11 +705,11 @@ public:
         using pointer = void;
 
         iterator() noexcept = default;
-        iterator(const std::uint8_t* base, const detail::Binding* eb, std::uint32_t i) noexcept : base_(base), eb_(eb), i_(i) {}
-        TESSERA_ALWAYS_INLINE reference operator*() const noexcept { return detail::read_element<T>(base_, i_, eb_); }
-        reference operator[](difference_type n) const noexcept { return detail::read_element<T>(base_, static_cast<std::uint32_t>(i_ + n), eb_); }
-        iterator& operator++() noexcept { ++i_; return *this; }
-        iterator operator++(int) noexcept { iterator t = *this; ++i_; return t; }
+        TESSERA_MSVC_FORCEINLINE iterator(const std::uint8_t* base, std::uint32_t i) noexcept : base_(base), i_(i) {}
+        TESSERA_ALWAYS_INLINE reference operator*() const noexcept { return detail::read_element<T>(base_, i_); }
+        reference operator[](difference_type n) const noexcept { return detail::read_element<T>(base_, static_cast<std::uint32_t>(i_ + n)); }
+        TESSERA_MSVC_FORCEINLINE iterator& operator++() noexcept { ++i_; return *this; }
+        TESSERA_MSVC_FORCEINLINE iterator operator++(int) noexcept { iterator t = *this; ++i_; return t; }
         iterator& operator--() noexcept { --i_; return *this; }
         iterator operator--(int) noexcept { iterator t = *this; --i_; return t; }
         iterator& operator+=(difference_type n) noexcept { i_ = static_cast<std::uint32_t>(i_ + n); return *this; }
@@ -638,33 +718,30 @@ public:
         friend iterator operator+(difference_type n, iterator a) noexcept { return a += n; }
         friend iterator operator-(iterator a, difference_type n) noexcept { return a -= n; }
         friend difference_type operator-(const iterator& a, const iterator& b) noexcept { return static_cast<difference_type>(a.i_) - static_cast<difference_type>(b.i_); }
-        friend bool operator==(const iterator& a, const iterator& b) noexcept { return a.i_ == b.i_; }
+        TESSERA_MSVC_FORCEINLINE friend bool operator==(const iterator& a, const iterator& b) noexcept { return a.i_ == b.i_; }
         friend auto operator<=>(const iterator& a, const iterator& b) noexcept { return a.i_ <=> b.i_; }
 
     private:
         const std::uint8_t* base_ = nullptr;  // first element
-        const detail::Binding* eb_ = nullptr;
         std::uint32_t i_ = 0;
     };
 
     constexpr Vector() noexcept = default;
-    Vector(const std::uint8_t* p, const detail::Binding* b) noexcept : p_(p), b_(b) {}
+    TESSERA_MSVC_FORCEINLINE explicit Vector(const std::uint8_t* p) noexcept : p_(p) {}
 
-    [[nodiscard]] std::uint32_t size() const noexcept { return detail::load32(p_); }
+    [[nodiscard]] TESSERA_MSVC_FORCEINLINE std::uint32_t size() const noexcept { return detail::load32(p_); }
     [[nodiscard]] bool empty() const noexcept { return size() == 0; }
     /// False when the vector is absent (an empty vector is present).
-    explicit operator bool() const noexcept { return p_ != detail::kEmpty; }
+    TESSERA_MSVC_FORCEINLINE explicit operator bool() const noexcept { return p_ != detail::kEmpty; }
 
     /// Element i (no bounds check).
-    [[nodiscard]] TESSERA_ALWAYS_INLINE reference operator[](std::uint32_t i) const noexcept {
-        return detail::read_element<T>(p_ + 4, i, b_ ? b_->element : nullptr);
-    }
+    [[nodiscard]] TESSERA_ALWAYS_INLINE reference operator[](std::uint32_t i) const noexcept { return detail::read_element<T>(p_ + 4, i); }
 
     /// Element i, or a default value when out of range.
     [[nodiscard]] value_type at(std::uint32_t i) const noexcept { return i < size() ? (*this)[i] : value_type{}; }
 
-    [[nodiscard]] iterator begin() const noexcept { return iterator(p_ + 4, b_ ? b_->element : nullptr, 0); }
-    [[nodiscard]] iterator end() const noexcept { return iterator(p_ + 4, nullptr, size()); }
+    [[nodiscard]] TESSERA_MSVC_FORCEINLINE iterator begin() const noexcept { return iterator(p_ + 4, 0); }
+    [[nodiscard]] TESSERA_MSVC_FORCEINLINE iterator end() const noexcept { return iterator(p_ + 4, size()); }
 
     /// Contiguous elements for scalar and inline-struct vectors (8-byte elements are 8-aligned when the buffer is).
     [[nodiscard]] const T* data() const noexcept
@@ -675,7 +752,6 @@ public:
 
 private:
     const std::uint8_t* p_ = detail::kEmpty;
-    const detail::Binding* b_ = nullptr;
 };
 
 /// Vector of optional values (C# `List<int?>`, `Vec3?[]`): a presence bit per element, then every element's value
@@ -698,8 +774,8 @@ public:
         iterator(const Vector* v, std::uint32_t i) noexcept : v_(v), i_(i) {}
         reference operator*() const noexcept { return (*v_)[i_]; }
         reference operator[](difference_type n) const noexcept { return (*v_)[static_cast<std::uint32_t>(i_ + n)]; }
-        iterator& operator++() noexcept { ++i_; return *this; }
-        iterator operator++(int) noexcept { iterator t = *this; ++i_; return t; }
+        TESSERA_MSVC_FORCEINLINE iterator& operator++() noexcept { ++i_; return *this; }
+        TESSERA_MSVC_FORCEINLINE iterator operator++(int) noexcept { iterator t = *this; ++i_; return t; }
         iterator& operator--() noexcept { --i_; return *this; }
         iterator operator--(int) noexcept { iterator t = *this; --i_; return t; }
         iterator& operator+=(difference_type n) noexcept { i_ = static_cast<std::uint32_t>(i_ + n); return *this; }
@@ -708,7 +784,7 @@ public:
         friend iterator operator+(difference_type n, iterator a) noexcept { return a += n; }
         friend iterator operator-(iterator a, difference_type n) noexcept { return a -= n; }
         friend difference_type operator-(const iterator& a, const iterator& b) noexcept { return static_cast<difference_type>(a.i_) - static_cast<difference_type>(b.i_); }
-        friend bool operator==(const iterator& a, const iterator& b) noexcept { return a.i_ == b.i_; }
+        TESSERA_MSVC_FORCEINLINE friend bool operator==(const iterator& a, const iterator& b) noexcept { return a.i_ == b.i_; }
         friend auto operator<=>(const iterator& a, const iterator& b) noexcept { return a.i_ <=> b.i_; }
 
     private:
@@ -717,12 +793,12 @@ public:
     };
 
     constexpr Vector() noexcept = default;
-    Vector(const std::uint8_t* p, const detail::Binding*) noexcept : p_(p) {}
+    TESSERA_MSVC_FORCEINLINE explicit Vector(const std::uint8_t* p) noexcept : p_(p) {}
 
-    [[nodiscard]] std::uint32_t size() const noexcept { return detail::load32(p_); }
+    [[nodiscard]] TESSERA_MSVC_FORCEINLINE std::uint32_t size() const noexcept { return detail::load32(p_); }
     [[nodiscard]] bool empty() const noexcept { return size() == 0; }
     /// False when the vector is absent (an empty vector is present).
-    explicit operator bool() const noexcept { return p_ != detail::kEmpty; }
+    TESSERA_MSVC_FORCEINLINE explicit operator bool() const noexcept { return p_ != detail::kEmpty; }
 
     /// Whether element i has a value (no bounds check).
     [[nodiscard]] bool has(std::uint32_t i) const noexcept { return (detail::load32(p_ + 4 + 4 * (i / 32)) >> (i % 32)) & 1u; }
@@ -742,6 +818,17 @@ private:
     const std::uint8_t* p_ = detail::kEmpty;
 };
 
+namespace detail {
+/// A dictionary's keys or values (the cell at `at`). A dictionary always stores both cells (an empty one has empty
+/// vectors; verification rejects one without), so the vector is one load away, without the presence header, and the
+/// read has no branch, so a loop can keep it out of the loop. An absent dictionary (kEmpty) reads as absent vectors.
+TESSERA_ALWAYS_INLINE const std::uint8_t* map_vector(const std::uint8_t* p, std::uint32_t at) noexcept {
+    const std::uint8_t* c = p + at;
+    const std::uint8_t* v = c + load32(c);
+    return p != kEmpty ? v : kEmpty;
+}
+}  // namespace detail
+
 /// View of a C# dictionary: its keys in ascending order (strings by UTF-8 bytes, which is code point order) and its
 /// values in the same order. Keys are integers, chars, enums or strings. Lookups are binary searches.
 template <class K, class V> class Map final : public Table<Map<K, V>> {
@@ -750,8 +837,8 @@ public:
     using key_type = K;
     using value_type = typename detail::value_of<V>::type;
 
-    [[nodiscard]] Vector<K> keys() const noexcept { return this->template tessera_get<schema<Map>::keys>(); }
-    [[nodiscard]] Vector<V> values() const noexcept { return this->template tessera_get<schema<Map>::values>(); }
+    [[nodiscard]] Vector<K> keys() const noexcept { return Vector<K>(detail::map_vector(this->p_, cell_at<schema<Map>::keys>())); }
+    [[nodiscard]] Vector<V> values() const noexcept { return Vector<V>(detail::map_vector(this->p_, cell_at<schema<Map>::values>())); }
     [[nodiscard]] std::uint32_t size() const noexcept { return keys().size(); }
     [[nodiscard]] bool empty() const noexcept { return size() == 0; }
 
@@ -781,19 +868,30 @@ public:
         if (i >= v.size()) return std::nullopt;  // not there (or a buffer with fewer values than keys)
         return value_type(v[i]);
     }
+
+private:
+    /// Position of member I's cell when both cells are stored (the header, then the cells in presence-bit order).
+    template <std::size_t I> static consteval std::uint32_t cell_at() {
+        using S = schema<Map>;
+        static_assert(S::fixed == 0 && std::size(S::cells) == 3, "a dictionary has its two vector cells only");
+        const std::uint32_t bit = std::get<I>(S::fields).bit;
+        std::uint32_t at = 4u * S::words;
+        for (std::uint32_t j = 0; j < bit; ++j) at += S::cells[j];
+        return at;
+    }
 };
 
 namespace detail {
 
 /// Value of a present field whose cell is at `cell`.
 template <class T>
-TESSERA_ALWAYS_INLINE return_t<T> read_present(const std::uint8_t* cell, const Binding* child) noexcept {
+TESSERA_ALWAYS_INLINE return_t<T> read_present(const std::uint8_t* cell) noexcept {
     constexpr Cat c = category<T>();
     if constexpr (c == Cat::Scalar) return load<T>(cell);
     else if constexpr (c == Cat::Optional) return T(load_value<typename is_optional<T>::inner>(cell));
     else if constexpr (c == Cat::String) return string_at(cell + load32(cell));
-    else if constexpr (c == Cat::Vector || c == Cat::Table) return T(cell + load32(cell), child);
-    else if constexpr (c == Cat::Union) return T(load32(cell), cell + 4 + load32(cell + 4), child);
+    else if constexpr (c == Cat::Vector || c == Cat::Table) return T(cell + load32(cell));
+    else if constexpr (c == Cat::Union) return T(cell);
     else if constexpr (c == Cat::Shared) {
         using S = typename is_shared<T>::inner;
         if constexpr (struct_has_bool<S>()) return load_value<S>(cell + load32(cell));
@@ -820,12 +918,7 @@ TESSERA_ALWAYS_INLINE return_t<T> read_absent(const typename default_of<T>::type
 }
 
 template <class T>
-TESSERA_ALWAYS_INLINE return_t<T> read_field(const std::uint8_t* cell, const Binding* child, const typename default_of<T>::type& def) noexcept {
-    return cell ? read_present<T>(cell, child) : read_absent<T>(def);
-}
-
-template <class T>
-TESSERA_ALWAYS_INLINE return_t<T> read_element(const std::uint8_t* base, std::uint32_t i, const Binding* eb) noexcept {
+TESSERA_ALWAYS_INLINE return_t<T> read_element(const std::uint8_t* base, std::uint32_t i) noexcept {
     constexpr Cat c = category<T>();
     if constexpr (std::is_same_v<T, bool>) {
         return base[i] != 0;
@@ -835,15 +928,13 @@ TESSERA_ALWAYS_INLINE return_t<T> read_element(const std::uint8_t* base, std::ui
         if constexpr (struct_has_bool<T>()) return load_value<T>(base + std::size_t{i} * sizeof(T));
         else return reinterpret_cast<const T*>(base)[i];
     } else if constexpr (c == Cat::Union) {
-        const std::uint8_t* slot = base + std::size_t{i} * 8;
-        const std::uint32_t off = load32(slot + 4);
-        return off ? T(load32(slot), slot + 4 + off, eb) : T();
+        return T(base + std::size_t{i} * 8);  // the element's tag and offset; both 0 for a null element
     } else {
         const std::uint8_t* slot = base + std::size_t{i} * 4;
         const std::uint32_t off = load32(slot);
         if constexpr (c == Cat::String) return off ? string_at(slot + off) : std::string_view();
-        else if constexpr (c == Cat::Shared) return off ? read_present<T>(slot, eb) : read_absent<T>(none_t{});
-        else return off ? T(slot + off, eb) : T();
+        else if constexpr (c == Cat::Shared) return off ? read_present<T>(slot) : read_absent<T>(none_t{});
+        else return off ? T(slot + off) : T();
     }
 }
 
@@ -871,9 +962,27 @@ template <class T> constexpr TypeInfoFn child_fn() noexcept {
     else return nullptr;
 }
 
+template <class T> constexpr std::uint32_t struct_align() noexcept {
+    if constexpr (category<T>() == Cat::Optional) return struct_align<typename is_optional<T>::inner>();
+    else if constexpr (category<T>() == Cat::Struct) return static_cast<std::uint32_t>(alignof(T));
+    else if constexpr (category<T>() == Cat::Shared) return static_cast<std::uint32_t>(alignof(typename is_shared<T>::inner));
+    else return 0;
+}
+
+/// Bit pattern of a scalar field's default (0 for everything else).
+template <class F> constexpr std::uint64_t default_bits(const F& f) noexcept {
+    using T = typename F::type;
+    if constexpr (category<T>() == Cat::Scalar && !std::is_same_v<T, bool>) {
+        using B = std::conditional_t<sizeof(T) == 1, std::uint8_t, std::conditional_t<sizeof(T) == 2, std::uint16_t, std::conditional_t<sizeof(T) == 4, std::uint32_t, std::uint64_t>>>;
+        return std::bit_cast<B>(f.def);
+    } else {
+        return 0;
+    }
+}
+
 template <class F> constexpr FieldInfo make_field(const F& f) noexcept {
     using T = typename F::type;
-    return FieldInfo{f.name, f.hash, f.bit, wire_kind<T>(), cell_size<T>(), struct_fp<T>(), struct_size<T>(), child_fn<T>()};
+    return FieldInfo{f.name, f.hash, f.bit, wire_kind<T>(), cell_size<T>(), struct_fp<T>(), struct_size<T>(), child_fn<T>(), struct_align<T>(), default_bits(f)};
 }
 
 template <class T> struct type_info_builder;
@@ -896,6 +1005,7 @@ template <class D> requires std::is_base_of_v<TableBase, D> struct type_info_bui
         t.cells = S::cells;
         t.fields = fields.data();
         t.field_count = static_cast<std::uint32_t>(N);
+        t.map = is_map<D>::value;
         return t;
     }
 };
@@ -910,6 +1020,7 @@ template <class E> struct type_info_builder<Vector<E>> {
         t.elem_size = category<E>() == Cat::Union ? 8u : (std::is_same_v<E, bool> ? 1u : cell_size<E>());
         t.elem_struct_fp = struct_fp<E>();
         t.elem_struct_size = struct_size<E>();
+        t.elem_struct_align = struct_align<E>();
         t.elem = child_fn<E>();
         return t;
     }

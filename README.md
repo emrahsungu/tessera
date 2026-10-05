@@ -292,18 +292,21 @@ would be visited once per path, which grows exponentially with nesting; when the
 verifier switches to checking each shared item once (the only case in which it allocates, for its memo). After
 verification, accessors are bounds-free loads.
 
-### Same models: compile-time positions; other models: bind once
+### Same models: compile-time positions; other models: translate once
 
 ```text
 buffer fingerprint == compiled fingerprint  ──►  compile-time positions, no lookups
                    !=                       ──►  parse the buffer's schema once, match members by the
-                                                 xxHash64 of their names, read through a binding table
+                                                 xxHash64 of their names, translate the buffer into
+                                                 the reader's layout, then compile-time positions
 ```
 
 Every buffer records a fingerprint of its root type's layout. A reader built from the same models takes the fast
-path. A reader built from other models matches members by name once, when the `Reader` is opened; members it does
-not find read as absent. The binder compares layouts structurally and never trusts the buffer's fingerprints for
-safety. See [docs/FORMAT.md](docs/FORMAT.md) for the complete wire format.
+path. A reader built from other models matches members by name once, when the `Reader` is opened, and translates the
+buffer into a copy in its own layout, so every read afterwards is the same plain load as on the fast path; members
+it does not find read as absent. Translation costs one copy of the buffer at open (items shared in the buffer stay
+shared), and the copy lives as long as the `Reader`. The binder compares layouts structurally and never trusts the
+buffer's fingerprints for safety. See [docs/FORMAT.md](docs/FORMAT.md) for the complete wire format.
 
 ### Generated code
 
@@ -311,7 +314,7 @@ safety. See [docs/FORMAT.md](docs/FORMAT.md) for the complete wire format.
 |---|---|---|
 | C# writers | compiled into your assembly | one writer per type, presence bits computed while writing, no reflection |
 | C++ headers | `TesseraCppOutputDir` after each build | one header per type (by C++ namespace) and one per assembly that includes them all |
-| C++ runtime | copied next to the headers | header-only: views, `Reader`, verifier, schema binding, JSON dump |
+| C++ runtime | copied next to the headers | header-only: views, `Reader`, verifier, schema translation, JSON dump |
 
 ## 6. Types
 
@@ -419,10 +422,12 @@ breaks old buffers. In Tessera:
   order (cells are sorted by alignment, size and name hash), so the layout and the fingerprint stay the same, and
   readers built from either version keep using compile-time positions.
 - **Add and delete members anywhere.** Each buffer carries a compact schema, about 12 bytes per member, which you can
-  turn off. A reader built from other models matches members by name through it, once per buffer. Members missing
-  from a buffer read as absent, with the reader's default.
+  turn off. A reader built from other models matches members by name through it, once per buffer, and translates the
+  buffer into its own layout. Members missing from a buffer read as absent, with the reader's default (a
+  `[TesseraKeepDefault]` member is always stored, so it reads as present, with its default).
 - **Rename** a member by keeping its wire name: `[TesseraName("OldName")]`.
-- **Changing a member's kind** makes it a different member: readers of the other version see it as absent.
+- **Changing a member's kind** makes it a different member: readers of the other version see it as absent. A
+  dictionary whose value type changes keeps its keys and has no values there; one whose key type changes is empty.
 - **Unions:** new member types can be added. Old readers see an unknown `type()`, and every `as_x()` is empty.
 - Without the schema (`IncludeSchema = false`), a reader accepts only buffers whose fingerprint matches its own
   (`Error::SchemaMismatch` otherwise): adding or deleting members then breaks old buffers, reordering does not.
@@ -532,7 +537,7 @@ sides as the noise control.
 | `src/Tessera` | runtime (writer, options, attributes) and the package project |
 | `src/Tessera.Generator` | source generator: model analysis, wire layout, C# writers, C++ headers |
 | `src/Tessera.Cpp` | build step that writes the generated headers to disk |
-| `cpp/include/tessera` | C++20 header-only runtime: views, verifier, schema binding, JSON dump |
+| `cpp/include/tessera` | C++20 header-only runtime: views, verifier, schema translation, JSON dump |
 | `tests` | .NET tests, generator tests, C++ interop, fuzz and UTF-8 tests |
 | `benchmarks` | the Tessera / FlatBuffers / MessagePack benchmark (C# writers, C++ readers) |
 | `samples/Quickstart` | the example above, end to end |

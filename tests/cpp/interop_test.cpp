@@ -106,6 +106,7 @@ static void check_evolution(const std::string& dir) {
         CHECK(p.removed() == 99 && p.kind_changed() == -2);
         CHECK(p.items().size() == 2 && p.items()[0].id() == "potion" && p.items()[0].count() == 3 && p.items()[1].id() == "key");
         CHECK(p.stats().str() == 5 && p.stats().dex() == 7 && p.favorite().id() == "key" && p.favorite().count() == 1);
+        CHECK(p.scores().size() == 2 && p.scores().find("a") == 1 && p.scores().find("b") == 2);
         Buffer b1 = load(dir, "player_v1");
         tessera::Reader<v3::Player> r3(b1.data(), b1.size);
         CHECK(r3 && r3.exact_schema());
@@ -119,14 +120,16 @@ static void check_evolution(const std::string& dir) {
         auto p = r.root();
         CHECK(p.display_name() == "Ann");
         CHECK(p.level() == 12 && p.health() == 0.75f && p.online());
-        CHECK(!p.has_gold() && p.gold() == 50);
+        CHECK(p.gold() == 50);  // missing from the writer: its default (a fixed cell is always stored, so has_gold())
         CHECK(!p.has_kind_changed() && p.kind_changed() == 0);
         CHECK(!p.has_title());
-        CHECK(p.items().size() == 2 && p.items()[0].id() == "potion" && p.items()[0].count() == 3 && !p.items()[0].has_rarity());
+        CHECK(p.items().size() == 2 && p.items()[0].id() == "potion" && p.items()[0].count() == 3 && p.items()[0].rarity() == 0);
         CHECK(p.items()[1].id() == "key" && p.items()[1].count() == 1);
         CHECK(p.stats().str() == 5 && p.stats().dex() == 7);
-        CHECK(p.stats().tessera_binding() == nullptr);  // unchanged type: compile-time positions
         CHECK(p.favorite().id() == "key");
+        // The values' type changed (int -> long): the dictionary keeps its keys and has no values.
+        CHECK(p.scores().size() == 2 && p.scores().keys()[0] == "a" && p.scores().values() && p.scores().values().empty());
+        CHECK(p.scores().contains("a") && !p.scores().find("a"));
     }
     {   // New buffer, old reader.
         Buffer b = load(dir, "player_v2");
@@ -135,15 +138,17 @@ static void check_evolution(const std::string& dir) {
         auto p = r.root();
         CHECK(p.name() == "Bob");
         CHECK(p.level() == 3 && p.health() == 1.0f && !p.online() && !p.has_online());
-        CHECK(!p.has_removed() && !p.has_kind_changed());
+        CHECK(p.removed() == 0 && !p.has_kind_changed());  // Removed: a fixed cell the writer lacks reads its default
         CHECK(p.items().size() == 1 && p.items()[0].id() == "gem" && p.items()[0].count() == 5);
         CHECK(p.stats().str() == 1 && p.stats().dex() == 2);
         CHECK(!p.favorite());
+        CHECK(p.scores().size() == 1 && p.scores().keys()[0] == "x" && p.scores().values().empty() && !p.scores().find("x"));
     }
     {   // Same version through the exact path.
         Buffer b = load(dir, "player_v2");
         tessera::Reader<v2::Player> r(b.data(), b.size);
         CHECK(r && r.exact_schema() && r.root().gold() == 1000 && r.root().title() == "Sir" && r.root().kind_changed() == 123456);
+        CHECK(r.root().scores().find("x") == 10);
     }
     {   // Without an embedded schema a different version cannot be read.
         Buffer b = load(dir, "player_v1_noschema");
@@ -198,6 +203,19 @@ static void check_maps(const std::string& dir, bool print) {
     CHECK(c.nested().find("x")->find("y") == 1 && !c.nested().find("y"));
     CHECK(c.empty() && c.empty().size() == 0 && !c.empty().find(1));
     CHECK(!c.missing() && c.missing().size() == 0 && !c.missing().contains(1));
+    // An empty dictionary stores two empty vectors; an absent one reads as absent vectors.
+    CHECK(c.empty().keys() && c.empty().values() && c.empty().keys().empty() && c.empty().values().empty());
+    CHECK(!c.missing().keys() && !c.missing().values());
+    // Readers find a dictionary's vectors without its presence bits, so verification rejects one without its values.
+    CHECK(r.exact_schema());
+    {
+        using S = tessera::schema<decltype(stock)>;
+        Buffer bad = b;
+        const std::size_t at = static_cast<std::size_t>(stock.tessera_data() - static_cast<const std::uint8_t*>(b.data()));
+        reinterpret_cast<std::uint8_t*>(bad.storage.data())[at] &= static_cast<std::uint8_t>(~(1u << std::get<S::values>(S::fields).bit));
+        CHECK(tessera::verify<m::Catalog>(bad.data(), bad.size) == tessera::Error::BadOffset);
+        CHECK(tessera::verify<m::Catalog>(b.data(), b.size) == tessera::Error::None);
+    }
     if (print) std::cout << "catalog: " << tessera::to_json(c) << "\n";
 }
 

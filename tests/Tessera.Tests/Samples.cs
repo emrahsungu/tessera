@@ -157,6 +157,7 @@ public static class Samples
         Removed = 99,
         KindChanged = -2,
         Favorite = new TestModels.V1.Item { Id = "key", Count = 1 },
+        Scores = new Dictionary<string, int> { ["b"] = 2, ["a"] = 1 },
     };
 
     /// <summary>The data of <see cref="PlayerV1"/> in the reordered V3 model.</summary>
@@ -171,6 +172,7 @@ public static class Samples
         Removed = 99,
         KindChanged = -2,
         Favorite = new TestModels.V3.Item { Id = "key", Count = 1 },
+        Scores = new Dictionary<string, int> { ["b"] = 2, ["a"] = 1 },
     };
 
     public static TestModels.V2.Player PlayerV2() => new()
@@ -184,6 +186,7 @@ public static class Samples
         Stats = new TestModels.V2.Stats { Str = 1, Dex = 2 },
         KindChanged = 123456,
         Title = "Sir",
+        Scores = new Dictionary<string, long> { ["x"] = 10 },
     };
 
     public static Wide WideDense()

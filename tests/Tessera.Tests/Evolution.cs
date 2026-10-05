@@ -17,6 +17,7 @@ namespace TestModels.V1
         [TesseraKeepDefault] public int Removed;            // a fixed cell the new version lacks
         public short KindChanged;
         public Item? Favorite;
+        public Dictionary<string, int>? Scores;
     }
 
     [Tessera("Item")]
@@ -49,6 +50,7 @@ namespace TestModels.V2
         public int KindChanged;                           // short -> int: unreadable, reads as absent
         public string? Title;                             // added
         public Item? Favorite;
+        public Dictionary<string, long>? Scores;          // values int -> long: unreadable, so the dictionary has no values
     }
 
     [Tessera("Item")]
@@ -82,6 +84,7 @@ namespace TestModels.V3
         public float Health;
         public Stats? Stats;
         public int Level { get; set; }
+        public Dictionary<string, int>? Scores { get; set; }
         public string? Name;
     }
 
