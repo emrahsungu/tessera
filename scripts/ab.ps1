@@ -244,5 +244,8 @@ if ((Test-Path $sa) -and (Test-Path $sb)) {
 foreach ($s in $summary) { [void]$head.AppendLine($s) }
 [void]$head.AppendLine()
 $text = $head.ToString() + $body.ToString()
-if ($Out) { [IO.File]::WriteAllText((Join-Path $root $Out), $text, (New-Object System.Text.UTF8Encoding $false)) }
+if ($Out) {
+    $outPath = if ([IO.Path]::IsPathRooted($Out)) { $Out } else { Join-Path $root $Out }
+    [IO.File]::WriteAllText($outPath, $text, (New-Object System.Text.UTF8Encoding $false))
+}
 Write-Output $text
