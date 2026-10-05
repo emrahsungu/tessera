@@ -224,7 +224,7 @@ public static class Report
             ("verify", "Verify", ""),
             ("full traversal", "Reading every field", "Every member's presence bit is tested, and compilers differ in how many branches they make of these checks: MSVC makes more than Clang on union-heavy objects such as prefab's, for the same source."),
             ("verify + traversal", "Verify, then read every field", ""),
-            ("random access x1000", "Random reads", "A member's position is a popcount over the presence bits of the members before it, so in wide objects (prefab, monsters) a late member takes a few more instructions than FlatBuffers' vtable lookup. On lookup these are dictionary entries read by index: keys and values are two vectors, so an entry takes one or two more loads than FlatBuffers' vector of key-value tables (lookups by key are faster)."),
+            ("random access x1000", "Random reads", "A member's position is a popcount over the presence bits of the members before it, so in wide objects (prefab, monsters) a late member takes a few more instructions than FlatBuffers' vtable lookup."),
             ("open + read one field", "Opening a buffer and reading one field", OpenRange(natives)),
             ("1000 lookups by string", "Dictionary lookups by string", ""),
             ("1000 lookups by int", "Dictionary lookups by int", ""),
@@ -240,7 +240,10 @@ public static class Report
                 if (slow.Count > 0) parts.Add($"{native.RootElement.GetProperty("compiler").GetString()}: {string.Join(", ", slow.Select(x => $"{x.w} {X(x.Ratio)}"))}");
             }
 
-            if (parts.Count > 0) lines.Add($"**{title}** (FlatBuffers faster): {string.Join("; ", parts)}.{(why.Length > 0 ? " " + why : "")}");
+            string because = why;
+            if (prefix == "random access x1000" && parts.Any(p => p.Contains("lookup ", StringComparison.Ordinal)))
+                because += " On lookup these are dictionary entries read by index: keys and values are two vectors, so an entry takes one or two more loads than FlatBuffers' vector of key-value tables (lookups by key are faster).";
+            if (parts.Count > 0) lines.Add($"**{title}** (FlatBuffers faster): {string.Join("; ", parts)}.{(because.Length > 0 ? " " + because : "")}");
         }
 
         // .NET write: the workloads where FlatBuffers or MessagePack write faster.
@@ -250,7 +253,7 @@ public static class Report
             var slow = workloads.Select(w => (w, Ratio: Us(w, "Tessera") / Us(w, other))).Where(x => x.Ratio > 1 && !double.IsInfinity(x.Ratio)).ToList();
             if (slow.Count == 0) continue;
             string why = slow.Any(x => x.w == "lookup")
-                ? " The lookup workload writes dictionaries, whose keys Tessera sorts so that C++ can binary-search them; MessagePack writes the entries as they come and can then only scan them."
+                ? " The lookup workload writes dictionaries, which Tessera stores as sorted keys (so that C++ can binary-search them) and a separate vector of values; MessagePack writes the entries as they come, inline, and can then only scan them."
                 : "";
             lines.Add($"**.NET write** ({other} faster): {string.Join(", ", slow.Select(x => $"{x.w} {X(x.Ratio)}"))}.{why}");
         }

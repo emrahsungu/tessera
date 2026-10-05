@@ -48,10 +48,10 @@ Tessera combines properties that usually come from different libraries:
 
 What you get:
 
-- **Fast writes.** 6× faster than FlatBuffers and 1.7× faster than MessagePack-CSharp on the benchmark workloads, with
-  no allocations besides the resulting array (with a reused writer, none at all for types without dictionaries).
-- **Fast, safe reads.** Verifying a buffer is 3.1–3.5× faster than FlatBuffers' verifier; verifying and then reading
-  every field is 1.5–1.7× faster (geometric means per compiler). After verification, every access is a plain load.
+- **Fast writes.** 6.8× faster than FlatBuffers and 1.9× faster than MessagePack-CSharp on the benchmark workloads
+  (geometric means), with no allocations besides the resulting array (with a reused writer, none at all).
+- **Fast, safe reads.** Verifying a buffer is 2.6–4.0× faster than FlatBuffers' verifier; verifying and then reading
+  every field is 1.6–2.0× faster (geometric means per compiler). After verification, every access is a plain load.
 - **Small buffers.** Default values and absent members take no space, and equal strings are stored once: buffers are
   up to 70% smaller than FlatBuffers' (1.3× on the geometric mean).
 - **Your classes are the schema.** No IDL and no attributes: classes, records, structs, enums, nullable values,
@@ -154,9 +154,9 @@ Buffers carry a compact schema, so readers built from older or newer models stil
 
 ## 4. Performance
 
-Environment: Intel Core i9-14900, Windows 11, .NET 10.0.12. C++ with clang-cl 19.1 and MSVC 19.43, each compiler
-with the same flags for every library (optimized, AVX2). Against FlatBuffers 25.12.19, MessagePack-CSharp 3.1.10 and
-msgpack-cxx 9.0.0. Medians of interleaved rounds.
+Environment: Intel Core i7-6700K, Windows 10, .NET 10.0.12. C++ with clang-cl 19.1, MSVC 19.42 and GCC 15.2 (in WSL),
+each compiler with the same flags for every library (optimized, AVX2). Against FlatBuffers 25.12.19,
+MessagePack-CSharp 3.1.10 and msgpack-cxx 9.0.0. Medians of interleaved rounds.
 
 There are eight workloads: a UI prefab (400 objects with polymorphic components), a game world (1,000 monsters),
 2,000 sparse records (40 optional fields each), a 20,000-sample time series, three scene graphs of 1,024 nodes (dense,
@@ -167,16 +167,16 @@ is timed.
 Summary: how many times faster (or smaller) Tessera is than FlatBuffers. A safe read verifies the buffer, then reads
 every field.
 
-| Workload | .NET write | Size | Safe read, Clang | Safe read, MSVC |
-|---|---:|---:|---:|---:|
-| prefab | 5.67× | 1.28× | 1.37× | 1.14× |
-| monsters | 4.56× | 1.18× | 1.29× | 1.48× |
-| records | 27.74× | 3.37× | 3.27× | 1.78× |
-| series | 4.33× | 1.00× | 1.80× | 1.55× |
-| dense-unique | 3.24× | 1.06× | 1.50× | 1.54× |
-| sparse-unique | 4.83× | 1.04× | 1.60× | 1.83× |
-| dense-shared | 5.57× | 1.32× | 1.47× | 1.52× |
-| lookup | 7.79× | 1.16× | 1.95× | 1.47× |
+| Workload | .NET write | Size | Safe read, Clang | Safe read, GCC | Safe read, MSVC |
+|---|---:|---:|---:|---:|---:|
+| prefab | 3.99× | 1.28× | 1.53× | 2.14× | 1.47× |
+| monsters | 4.65× | 1.18× | 1.44× | 1.64× | 1.41× |
+| records | 30.71× | 3.37× | 2.43× | 2.65× | 3.17× |
+| series | 4.57× | 1.00× | 1.79× | 1.72× | 1.60× |
+| dense-unique | 3.64× | 1.06× | 1.46× | 1.95× | 1.34× |
+| sparse-unique | 5.40× | 1.04× | 1.73× | 1.97× | 1.67× |
+| dense-shared | 5.36× | 1.32× | 1.44× | 1.95× | 1.33× |
+| lookup | 16.11× | 1.16× | 2.34× | 2.33× | 1.60× |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmarks/summary-dark.svg">
@@ -225,16 +225,15 @@ smaller on the prefab and the sparse records. Tessera keeps values fixed-width s
 
 ### Where Tessera is slower
 
-- **Random reads of wide objects with Clang:** up to 1.24× slower. Locating a member preceded by many members of
-  other sizes costs a few more instructions than a vtable lookup.
-- **Reading every field of the union-heavy prefab with MSVC:** 1.63× slower. With Clang, the same code runs about as
-  fast as FlatBuffers.
-- **Reading dictionary entries by index** with Clang (1.71×) and MSVC (1.09×): keys and values are two vectors, so an
-  entry takes more loads than FlatBuffers' table per entry. Lookups by key match or beat FlatBuffers'.
-- **Opening a buffer and reading one field:** both take 2–5 ns; FlatBuffers is up to 1 ns faster on the records,
-  series and lookup workloads.
-- **Writing dictionaries:** 3.4× slower than MessagePack, which writes entries unsorted (and can then only scan
-  them). FlatBuffers sorts too, and is 7.8× slower than Tessera.
+- **Random reads of the wide prefab objects** with GCC (1.24× slower) and Clang (1.16×), and of the monsters with
+  Clang (1.07×). Locating a member preceded by many members of other sizes takes a few more instructions than a
+  vtable lookup. With MSVC, reading single nodes of the repeated scene is 1.07× slower.
+- **Reading every field of the union-heavy prefab with MSVC:** 1.27× slower. MSVC does not inline the benchmark's
+  small helper functions into the large function that reads the five component types. With Clang and GCC, the same
+  code runs as fast as FlatBuffers.
+- **Opening a buffer and reading one field:** both take 4–9 ns; with GCC, FlatBuffers is 0.5 ns faster on the prefab.
+- **Writing dictionaries:** 1.5× slower than MessagePack, which writes the entries as they come (and can then only
+  scan them). FlatBuffers stores them sorted too, and is 16× slower than Tessera.
 
 The full list, computed from the results, is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
@@ -274,14 +273,15 @@ plain structs (C layout) are stored inline; strings, vectors, objects and union 
 
 Members marked `[TesseraKeepDefault]` (scalars, enums and plain structs) are always stored, so they need no presence
 bit: they come first, at constant positions, and reading one is a single load. On the time series workload, that makes
-random reads 19–29% faster and verification 9–18% faster, at the same size.
+random reads 18–35% faster and verification 7–40% faster, at the same size.
 
 ### Written back to front
 
 The writer builds a buffer from the end, so every offset points forward and cycles are impossible. With
 `Sharing.Strings` (the default), equal strings are written once; with `Sharing.All`, equal strings, vectors, shared
 structs and objects are written once, and the buffer becomes a DAG. Writers are generated per type: no reflection, and
-with a reused `TesseraWriter` no allocations (sorting a dictionary's keys allocates about 100 bytes).
+with a reused `TesseraWriter` no allocations (except a dictionary other than `Dictionary<TKey, TValue>`, such as a
+`SortedDictionary`, whose enumerator is allocated: about 230 bytes).
 
 ### Verify once, then plain loads
 
