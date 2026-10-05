@@ -162,16 +162,23 @@ public sealed partial class TesseraWriter
     /// <summary>Writes a UTF-8 string ([u32 length][bytes][0]) and returns its position.</summary>
     public int WriteString(string value)
     {
-        if (_shareStrings && _strings.TryGetValue(value, out int existing)) return existing;
+        if (!_shareStrings) return WriteStringBytes(value);
+        // One lookup: the entry is added here and set once the string is written. (A write that throws abandons the
+        // buffer, and the next one starts with Reset.)
+        ref int known = ref CollectionsMarshal.GetValueRefOrAddDefault(_strings, value, out bool exists);
+        if (exists) return known;
+        return known = WriteStringBytes(value);
+    }
+
+    private int WriteStringBytes(string value)
+    {
         int byteCount = Encoding.UTF8.GetByteCount(value);
         int size = 4 + byteCount + 1;
         ref byte p = ref Reserve(size, 4, size);
         Unsafe.WriteUnaligned(ref p, (uint)byteCount);
         Encoding.UTF8.GetBytes(value, MemoryMarshal.CreateSpan(ref Unsafe.Add(ref p, 4), byteCount));
         Unsafe.Add(ref p, 4 + byteCount) = 0;
-        int pos = Position;
-        if (_shareStrings) _strings[value] = pos;
-        return pos;
+        return Position;
     }
 
     // ------------------------------------------------------------------ vectors

@@ -304,13 +304,23 @@ namespace Tessera.Generator
             _w.Line($"{map.CsKeyType}[] keys = {keyPool}.Rent(n);");
             _w.Line($"{map.CsValueType}[] values = {valuePool}.Rent(n);");
             _w.Line("int count = 0;");
+            // A Dictionary is enumerated with its own struct enumerator: no boxing, no interface calls per entry.
+            _w.Open($"if (v is global::System.Collections.Generic.Dictionary<{map.CsKeyType}, {map.CsValueType}> d)");
+            _w.Open("foreach (var kv in d)");
+            _w.Line("if (count == n) break;");
+            _w.Line("keys[count] = kv.Key;");
+            _w.Line("values[count++] = kv.Value;");
+            _w.Close();
+            _w.Close();
+            _w.Open("else");
             _w.Open("foreach (var kv in v)");
             _w.Line("if (count == n) break;");
             _w.Line("keys[count] = kv.Key;");
             _w.Line("values[count++] = kv.Value;");
             _w.Close();
+            _w.Close();
             // Strings by code point: the order of their UTF-8 bytes, which is how C++ compares them.
-            _w.Line(map.Key.Kind == WireKind.String ? "global::System.Array.Sort(keys, values, 0, count, TesseraMapKeys.Utf8Order);" : "global::System.Array.Sort(keys, values, 0, count);");
+            _w.Line(map.Key.Kind == WireKind.String ? "TesseraMapKeys.SortUtf8(keys, values, count);" : "TesseraMapKeys.Sort(keys, values, count);");
             _w.Line($"int rValues = {VectorHelper(values.Value)}(w, new global::System.ReadOnlySpan<{map.CsValueType}>(values, 0, count));");
             _w.Line($"int rKeys = {VectorHelper(keys.Value)}(w, new global::System.ReadOnlySpan<{map.CsKeyType}>(keys, 0, count));");
             _w.Line($"{keyPool}.Return(keys, clearArray: {(map.Key.IsReferenceType ? "true" : "false")});");

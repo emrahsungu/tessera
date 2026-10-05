@@ -14,9 +14,11 @@ using Bench.Models;
 using Tessera;
 using MessagePack;
 
-// Usage: Tessera.Benchmarks [--export-only] [--quick] [--rounds N] [--round-ms N] [--warmup-ms N]  |  Tessera.Benchmarks --report <results dir> <out.md>
+// Usage: Tessera.Benchmarks [--export-only] [--quick] [--rounds N] [--round-ms N] [--warmup-ms N] [--filter text]
+//        Tessera.Benchmarks --report <results dir> <out.md>
 // 1. builds the four workloads, 2. writes every library's buffer and the expected checksums for the C++ benchmark,
 // 3. times serialization (unless --export-only) and writes benchmarks/results/dotnet.json.
+// --filter keeps only cases whose "workload/library/variant" contains the text (for focused tuning).
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
 if (args.Length == 3 && args[0] == "--report")
 {
@@ -69,6 +71,13 @@ try
 catch (Exception e)
 {
     Console.WriteLine("note: could not set priority/affinity: " + e.Message);
+}
+
+int filterAt = Array.IndexOf(args, "--filter");
+if (filterAt >= 0 && filterAt + 1 < args.Length)
+{
+    string filter = args[filterAt + 1];
+    cases.RemoveAll(c => !$"{c.Workload}/{c.Library}/{c.Variant}".Contains(filter, StringComparison.Ordinal));
 }
 
 Harness.Run(cases, rounds, roundMs, warmupMs, s => Console.Error.WriteLine(s));

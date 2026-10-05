@@ -567,7 +567,7 @@ public class GeneratorTests
         Assert.Contains("::tessera::Map<std::int64_t, tessera::Vector<std::string_view>>", h);
         Assert.Equal(3, r.Files.Count(f => f.Path.StartsWith("tessera_maps/", StringComparison.Ordinal)));
         Assert.Contains("static constexpr std::size_t keys = ", h);
-        Assert.Contains("TesseraMapKeys.Utf8Order", r.Writers);   // string keys sorted by code point
+        Assert.Contains("TesseraMapKeys.SortUtf8(", r.Writers);   // string keys sorted by code point
         AssertCompilesCleanly(r);
     }
 
