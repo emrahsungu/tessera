@@ -1,0 +1,16 @@
+<Project>
+  <!--
+    Uses Tessera from this repository instead of the NuGet package: import this file at the end of a project file.
+    It adds the runtime, the source generator (as an analyzer) and the header export tool, plus the package's
+    build props/targets, so the project behaves exactly like one with <PackageReference Include="Tessera" />.
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)Tessera/build/Tessera.props" />
+
+  <ItemGroup>
+    <ProjectReference Include="$(MSBuildThisFileDirectory)Tessera/Tessera.csproj" />
+    <ProjectReference Include="$(MSBuildThisFileDirectory)Tessera.Generator/Tessera.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="$(MSBuildThisFileDirectory)Tessera.Cpp/Tessera.Cpp.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)Tessera/build/Tessera.targets" />
+</Project>

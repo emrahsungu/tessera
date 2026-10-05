@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The official FlatBuffers C# runtime compiled from the pinned release source (scripts/deps.ps1), with the same
+       settings the release workflow uses for the NuGet package (dotnet build -c Release, no extra defines). -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>Google.FlatBuffers</AssemblyName>
+    <RootNamespace>Google.FlatBuffers</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Nullable>disable</Nullable>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS1591;CS1570;CS1572;CS1573;CS0618;CS8981</NoWarn>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\.deps\flatbuffers\net\FlatBuffers\*.cs" />
+  </ItemGroup>
+
+</Project>

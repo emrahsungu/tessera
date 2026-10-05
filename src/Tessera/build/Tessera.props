@@ -1,0 +1,10 @@
+<Project>
+  <!-- Lets the Tessera source generator read these MSBuild properties. -->
+  <ItemGroup>
+    <CompilerVisibleProperty Include="TesseraCppNaming" />
+    <CompilerVisibleProperty Include="TesseraCppNamespace" />
+    <CompilerVisibleProperty Include="TesseraCppHeaderName" />
+    <CompilerVisibleProperty Include="TesseraRequireAttribute" />
+    <CompilerVisibleProperty Include="RootNamespace" />
+  </ItemGroup>
+</Project>

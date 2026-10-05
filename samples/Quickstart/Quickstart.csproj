@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RollForward>Major</RollForward>
+    <IsPackable>false</IsPackable>
+    <!-- After each build: cpp/generated/Quickstart.tessera.hpp plus the C++ runtime headers (cpp/generated/tessera/). -->
+    <TesseraCppOutputDir>cpp/generated</TesseraCppOutputDir>
+  </PropertyGroup>
+
+  <!-- Outside this repository use the package instead: <PackageReference Include="Tessera" Version="0.1.0-preview" /> -->
+  <Import Project="..\..\src\Tessera.ProjectReference.targets" />
+
+</Project>

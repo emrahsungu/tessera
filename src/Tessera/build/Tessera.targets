@@ -1,0 +1,34 @@
+<Project>
+  <!--
+    After every build, writes the C++ header the Tessera source generator embedded in the assembly to $(TesseraCppOutputDir)
+    (when set), together with the C++ runtime headers (tessera/tessera.hpp, tessera/tessera_reader.hpp) of the same version.
+    The header is read from the assembly metadata by the small Tessera.Cpp tool; no model code runs. Unchanged files are
+    left alone so C++ builds don't rebuild needlessly.
+
+      TesseraCppOutputDir     folder for the headers (relative to the project); empty = no export
+      TesseraCppCopyRuntime   false = don't copy the C++ runtime headers (default true)
+  -->
+  <PropertyGroup>
+    <!-- Package layout: tools/ and include/ next to build/. Repository layout: src/Tessera.Cpp and cpp/include. -->
+    <TesseraCppTool Condition="'$(TesseraCppTool)' == '' and Exists('$(MSBuildThisFileDirectory)../tools/net8.0/Tessera.Cpp.dll')">$(MSBuildThisFileDirectory)../tools/net8.0/Tessera.Cpp.dll</TesseraCppTool>
+    <TesseraCppTool Condition="'$(TesseraCppTool)' == ''">$(MSBuildThisFileDirectory)../../Tessera.Cpp/bin/$(Configuration)/net8.0/Tessera.Cpp.dll</TesseraCppTool>
+    <TesseraCppRuntimeDir Condition="'$(TesseraCppRuntimeDir)' == '' and Exists('$(MSBuildThisFileDirectory)../include/tessera')">$(MSBuildThisFileDirectory)../include/tessera</TesseraCppRuntimeDir>
+    <TesseraCppRuntimeDir Condition="'$(TesseraCppRuntimeDir)' == ''">$(MSBuildThisFileDirectory)../../../cpp/include/tessera</TesseraCppRuntimeDir>
+    <TesseraCppCopyRuntime Condition="'$(TesseraCppCopyRuntime)' == ''">true</TesseraCppCopyRuntime>
+  </PropertyGroup>
+
+  <Target Name="TesseraExportCppHeaders" AfterTargets="Build" Condition="'$(TesseraCppOutputDir)' != ''">
+    <PropertyGroup>
+      <_TesseraCppOut>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(TesseraCppOutputDir)').TrimEnd('\').TrimEnd('/'))</_TesseraCppOut>
+      <!-- The dotnet host running this build (set by the .NET SDK); falls back to dotnet on PATH. -->
+      <_TesseraDotnet>$(DOTNET_HOST_PATH)</_TesseraDotnet>
+      <_TesseraDotnet Condition="'$(_TesseraDotnet)' == ''">dotnet</_TesseraDotnet>
+    </PropertyGroup>
+    <ItemGroup>
+      <_TesseraRuntimeHeader Include="$(TesseraCppRuntimeDir)/*.hpp" />
+    </ItemGroup>
+    <Error Condition="!Exists('$(TesseraCppTool)')" Text="Tessera: header export tool not found at '$(TesseraCppTool)'. Build src/Tessera.Cpp or set TesseraCppTool." />
+    <Exec Command="&quot;$(_TesseraDotnet)&quot; &quot;$(TesseraCppTool)&quot; export &quot;@(IntermediateAssembly->'%(FullPath)')&quot; &quot;$(_TesseraCppOut)&quot;" />
+    <Copy Condition="'$(TesseraCppCopyRuntime)' == 'true'" SourceFiles="@(_TesseraRuntimeHeader)" DestinationFolder="$(_TesseraCppOut)/tessera" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

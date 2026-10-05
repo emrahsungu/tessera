@@ -1,0 +1,31 @@
+# Build output
+**/bin/
+**/obj/
+/artifacts/
+/build/
+/out/
+# Third-party downloads (scripts/deps.ps1)
+/.deps/
+# Benchmark scratch output (published results live in docs/benchmarks)
+/benchmarks/results/
+# IDE / local tools
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+CMakeUserPresets.json
+
+# C++ test build output and files exported by the .NET tests
+/tests/cpp/build/
+/tests/cpp/generated/
+# Benchmark build output and generated inputs (scripts/bench.ps1 regenerates them)
+/benchmarks/generated/
+/benchmarks/native/build/
+/samples/*/cpp/generated/
+/samples/*/cpp/build/
+/samples/*/*.bin
+
+# A/B benchmark worktrees and results (scripts/ab.ps1)
+/.ab/
+/tests/cpp/generated-shared/

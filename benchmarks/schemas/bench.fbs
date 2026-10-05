@@ -1,0 +1,195 @@
+// FlatBuffers schemas for the four benchmark workloads. They mirror benchmarks/Tessera.Benchmarks/Models.cs.
+namespace Bench.Fb;
+
+struct Vec2 { x:float; y:float; }
+struct Vec3 { x:float; y:float; z:float; }
+struct Vec4 { x:float; y:float; z:float; w:float; }
+struct ObjectRef { component_name:uint; index:short; object_ref_id:short; }
+
+// ---------------------------------------------------------------- UI prefab
+
+table ImageComponent {
+  sprite:string;
+  material:string;
+  color:Vec4;
+  uv_rect:Vec4;
+  fill_method:int;
+  fill_amount:float;
+  enable:bool;
+  raycast_target:bool;
+  preserve_aspect:bool;
+}
+
+table TextComponent {
+  text:string;
+  font:string;
+  color:Vec4;
+  font_size:float;
+  line_spacing:float;
+  alignment:short;
+  color_mode:ubyte;
+  enable:bool;
+  rich_text:bool;
+}
+
+table ButtonComponent {
+  target:ObjectRef;
+  on_click:ObjectRef;
+  interactable:bool;
+  transition:ubyte;
+}
+
+table LayoutComponent {
+  padding:Vec4;
+  spacing:float;
+  child_alignment:int;
+  control_width:bool;
+  control_height:bool;
+  expand_width:bool;
+  expand_height:bool;
+}
+
+table ControllerComponent {
+  sets:[ObjectRef];
+  empties:[ObjectRef];
+  hides:[ObjectRef];
+  images:[ObjectRef];
+  icons:[ObjectRef];
+  names:[ObjectRef];
+  levels:[ObjectRef];
+  skills:[ObjectRef];
+  texts:[ObjectRef];
+  buttons:[ObjectRef];
+  icon:ObjectRef;
+  glow:ObjectRef;
+  level:ObjectRef;
+  star:ObjectRef;
+  skill_list:ObjectRef;
+  badge:ObjectRef;
+  banner:ObjectRef;
+  counter:ObjectRef;
+  divider:ObjectRef;
+  header:ObjectRef;
+  background:ObjectRef;
+  group:ObjectRef;
+  caption:ObjectRef;
+  thumbnail:ObjectRef;
+  tooltip:ObjectRef;
+  is_pinned:bool = null;
+  show_title:bool = null;
+  is_featured:bool = null;
+  locked:bool = null;
+  enable:bool = null;
+}
+
+union Component { ImageComponent, TextComponent, ButtonComponent, LayoutComponent, ControllerComponent }
+
+table PrefabObject {
+  name:string;
+  components:[Component];
+  children:[int];
+  rotation:Vec4;
+  position:Vec3;
+  scale:Vec3;
+  pivot:Vec2;
+  anchor_min:Vec2;
+  anchor_max:Vec2;
+  size_delta:Vec2;
+  id:int;
+  active:bool;
+}
+
+table Prefab {
+  objects:[PrefabObject];
+}
+
+// ---------------------------------------------------------------- game monsters
+
+enum Color : ubyte { Red = 0, Green, Blue }
+
+table Weapon {
+  name:string;
+  damage:short;
+}
+
+table Monster {
+  name:string;
+  hp:short = 100;
+  mana:short = null;
+  pos:Vec3;
+  color:Color = Blue;
+  inventory:[ubyte];
+  weapons:[Weapon];
+  equipped:Weapon;
+  path:[Vec3];
+  friendly:bool;
+}
+
+table World {
+  monsters:[Monster];
+}
+
+// ---------------------------------------------------------------- sparse records (40 optional fields)
+
+table Record {
+  i0:int = null; i1:int = null; i2:int = null; i3:int = null; i4:int = null; i5:int = null; i6:int = null; i7:int = null;
+  i8:int = null; i9:int = null; i10:int = null; i11:int = null; i12:int = null; i13:int = null; i14:int = null; i15:int = null;
+  f0:float = null; f1:float = null; f2:float = null; f3:float = null; f4:float = null; f5:float = null; f6:float = null; f7:float = null;
+  d0:double = null; d1:double = null; d2:double = null; d3:double = null;
+  b0:bool = null; b1:bool = null; b2:bool = null; b3:bool = null; b4:bool = null; b5:bool = null; b6:bool = null; b7:bool = null;
+  s0:string; s1:string; s2:string; s3:string;
+}
+
+table RecordSet {
+  records:[Record];
+}
+
+// ---------------------------------------------------------------- dense time series
+
+table Sample {
+  timestamp:long;
+  value:double;
+  status:int;
+  quality:float;
+  note:string;
+}
+
+table Series {
+  samples:[Sample];
+}
+
+// ---------------------------------------------------------------- scene graphs
+
+table Node {
+  id:int;
+  name:string;
+  active:bool = null;
+  x:float;
+  y:float;
+  z:float;
+  parent:int = null;
+  children:[int];
+}
+
+table Scene {
+  nodes:[Node];
+  name:string;
+}
+
+// ---------------------------------------------------------------- dictionaries (vectors sorted by key, binary search)
+
+table LookupItem {
+  name:string (key);
+  count:int;
+  weight:float;
+}
+
+table LookupPrice {
+  id:int (key);
+  price:double;
+}
+
+table Lookup {
+  items:[LookupItem];
+  prices:[LookupPrice];
+}

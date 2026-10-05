@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Tessera.Cpp/Tessera.Cpp.csproj" />
+    <Project Path="src/Tessera.Generator/Tessera.Generator.csproj" />
+    <Project Path="src/Tessera/Tessera.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Tessera.Generator.Tests/Tessera.Generator.Tests.csproj" />
+    <Project Path="tests/Tessera.Tests.Shared/Tessera.Tests.Shared.csproj" />
+    <Project Path="tests/Tessera.Tests/Tessera.Tests.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Quickstart/Quickstart.csproj" />
+  </Folder>
+</Solution>

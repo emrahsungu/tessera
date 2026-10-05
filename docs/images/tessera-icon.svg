@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Tessera Mosaic icon</title>
+  <desc id="desc">Five separated square tiles form a T. The top-center tile is turquoise; the other four are deep teal.</desc>
+  <g fill="#075366">
+    <rect x="40" y="40" width="132" height="132"/>
+    <rect x="340" y="40" width="132" height="132"/>
+    <rect x="190" y="190" width="132" height="132"/>
+    <rect x="190" y="340" width="132" height="132"/>
+  </g>
+  <rect x="190" y="40" width="132" height="132" fill="#15CFC5"/>
+</svg>

@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <RootNamespace>Tessera</RootNamespace>
+    <Description>Zero-copy binary buffers from plain .NET models, read in place from C++ through generated headers. Includes the source generator, the header export step and the C++ runtime headers.</Description>
+    <PackageId>Tessera</PackageId>
+    <PackageTags>serialization;binary;zero-copy;cpp;interop;source-generator;flatbuffers;messagepack</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\*.cs" LinkBase="Shared" />
+  </ItemGroup>
+
+  <!--
+    One package carries everything: the runtime (lib/), the source generator (analyzers/), the header export tool
+    (tools/), the C++ runtime headers (include/) and the MSBuild glue (build/). The two projects below are built
+    first but are not package dependencies.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Tessera.Generator\Tessera.Generator.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <ProjectReference Include="..\Tessera.Cpp\Tessera.Cpp.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="build\Tessera.props;build\Tessera.targets" Pack="true" PackagePath="build" />
+    <None Include="..\Tessera.Generator\bin\$(Configuration)\netstandard2.0\Tessera.Generator.dll" Pack="true" PackagePath="analyzers\dotnet\cs" Visible="false" />
+    <None Include="..\Tessera.Cpp\bin\$(Configuration)\net8.0\Tessera.Cpp.dll;..\Tessera.Cpp\bin\$(Configuration)\net8.0\Tessera.Cpp.runtimeconfig.json;..\Tessera.Cpp\bin\$(Configuration)\net8.0\Tessera.Cpp.deps.json" Pack="true" PackagePath="tools\net8.0" Visible="false" />
+    <None Include="..\..\cpp\include\tessera\tessera.hpp;..\..\cpp\include\tessera\tessera_reader.hpp" Pack="true" PackagePath="include\tessera" Visible="false" />
+    <None Include="..\..\README.md;..\..\LICENSE;icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+</Project>

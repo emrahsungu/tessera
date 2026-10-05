@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="currentColor" role="img" aria-labelledby="title desc">
+  <title id="title">Tessera Mosaic icon in one color</title>
+  <desc id="desc">Five separated square tiles form a T.</desc>
+  <rect x="40" y="40" width="132" height="132"/>
+  <rect x="190" y="40" width="132" height="132"/>
+  <rect x="340" y="40" width="132" height="132"/>
+  <rect x="190" y="190" width="132" height="132"/>
+  <rect x="190" y="340" width="132" height="132"/>
+</svg>

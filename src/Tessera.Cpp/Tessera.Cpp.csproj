@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RollForward>Major</RollForward>
+    <AssemblyName>Tessera.Cpp</AssemblyName>
+    <RootNamespace>Tessera.Cpp</RootNamespace>
+    <Description>Writes the C++ headers that Tessera.Generator embedded in a compiled model assembly.</Description>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

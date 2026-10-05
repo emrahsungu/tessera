@@ -1,0 +1,81 @@
+// Wide model: 72 members, 92 header bits (three header words).
+using Tessera;
+
+namespace TestModels;
+
+[Tessera]
+public class Wide
+{
+    public int F00;
+    public int F01;
+    public int F02;
+    public int F03;
+    public int F04;
+    public int F05;
+    public int F06;
+    public int F07;
+    public int F08;
+    public int F09;
+    public int F10;
+    public int F11;
+    public int F12;
+    public int F13;
+    public int F14;
+    public int F15;
+    public int F16;
+    public int F17;
+    public int F18;
+    public int F19;
+    public int F20;
+    public int F21;
+    public int F22;
+    public int F23;
+    public int F24;
+    public int F25;
+    public int F26;
+    public int F27;
+    public int F28;
+    public int F29;
+    public int F30;
+    public int F31;
+    public int F32;
+    public int F33;
+    public int F34;
+    public int F35;
+    public int F36;
+    public int F37;
+    public int F38;
+    public int F39;
+    public bool B00;
+    public bool B01;
+    public bool B02;
+    public bool B03;
+    public bool B04;
+    public bool B05;
+    public bool B06;
+    public bool B07;
+    public bool B08;
+    public bool B09;
+    public bool B10;
+    public bool B11;
+    public bool B12;
+    public bool B13;
+    public bool B14;
+    public bool B15;
+    public bool B16;
+    public bool B17;
+    public bool B18;
+    public bool B19;
+    public string? S0;
+    public string? S1;
+    public string? S2;
+    public string? S3;
+    public string? S4;
+    public string? S5;
+    public string? S6;
+    public string? S7;
+    public double D0;
+    public double D1;
+    public double D2;
+    public double D3;
+}
