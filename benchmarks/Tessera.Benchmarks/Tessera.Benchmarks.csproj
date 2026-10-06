@@ -22,6 +22,14 @@
     <PackageReference Include="MessagePack" Version="3.1.10" />
   </ItemGroup>
 
+  <!-- Result arrays of every library (up to about 1 MB, on the canada workload) are allocated as ordinary objects that
+       die young. With the default threshold (85 KB) they are large objects, which only the much rarer full
+       collections free, and the time those take per write varied erratically with the exact size (155 KB cost twice
+       as much as 240 KB, for example), so equal work by two libraries could time differently. -->
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.LOHThreshold" Value="4194304" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\FlatBuffers.Runtime\FlatBuffers.Runtime.csproj" />
   </ItemGroup>

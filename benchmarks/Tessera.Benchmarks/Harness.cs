@@ -21,8 +21,9 @@ public sealed class Case
 public sealed record Stats(double Median, double Min, double Max, double MadPercent);
 
 /// <summary>
-/// Timing loop: warm up every case, then run interleaved rounds (each case runs ~RoundMs per round) so slow drifts
-/// (turbo, thermal, background work) affect all cases alike. Reports the median of the per-round results.
+/// Timing loop: warm up every case, then run interleaved rounds (each case runs ~RoundMs per round, starting on a
+/// collected heap) so slow drifts (turbo, thermal, background work) affect all cases alike. Reports the median of the
+/// per-round results.
 /// </summary>
 public static class Harness
 {
@@ -51,7 +52,13 @@ public static class Harness
             foreach (int i in order)
             {
                 var c = cases[i];
+                // Every case starts on a collected heap, as with BenchmarkDotNet's default: garbage left by the case
+                // before (up to 1 MB per operation on the canada workload) is collected outside the timing instead
+                // of in whichever case happens to run next. A case still pays for the collections its own
+                // allocations cause.
+                FullCollect();
                 int n = Calibrate(c, roundMs);
+                FullCollect();
                 long t0 = Stopwatch.GetTimestamp();
                 for (int k = 0; k < n; k++) Sink ^= c.Op();
                 long t1 = Stopwatch.GetTimestamp();
@@ -72,6 +79,13 @@ public static class Harness
             if (elapsed >= ms / 4.0 || n >= 1 << 24) return Math.Max(1, (int)(n * ms / Math.Max(elapsed, 0.001)));
             n *= 2;
         }
+    }
+
+    private static void FullCollect()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
     }
 
     private static void Spin(Case c, int ms)

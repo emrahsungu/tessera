@@ -104,7 +104,7 @@ public static class Report
         string[] writeColumns = { "Tessera", "Tessera (no sharing)", "Tessera (full sharing)", "FlatBuffers", "MessagePack" };
         sb.AppendLine("## .NET write (µs per buffer, lower is better)");
         sb.AppendLine();
-        sb.AppendLine("Object graph to `byte[]` with a reused writer/builder (each library's normal path). Tessera's default shares equal strings.");
+        sb.AppendLine("Object graph to `byte[]` with a reused writer/builder (each library's normal path). Tessera's default shares equal strings. Every case starts on a collected heap, and the large-object threshold is raised to 4 MB, so result arrays die young like any other object (at the default 85 KB, the full collections that free them took time that varied erratically with the result's exact size). The table after this one leaves the final copy out.");
         sb.AppendLine();
         Table(sb, "Workload", writeColumns, workloads, (w, c) => Fmt(write.FirstOrDefault(x => x.Workload == w && x.Library == c && x.Variant == "to byte[]").Us),
             (w, c) => Best(write.Where(x => x.Workload == w && x.Variant == "to byte[]" && (x.Library == "Tessera" || x.Library == "FlatBuffers" || x.Library == "MessagePack" || x.Library == "Tessera (no sharing)")).Select(x => (x.Library, x.Us)), c));
