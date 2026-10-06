@@ -1,39 +1,33 @@
-// Reads the buffer written by Program.cs. Build with CMake (see CMakeLists.txt) after `dotnet build` of the sample.
-#include "Quickstart.tessera.hpp"
+// Reads the buffer written by Program.cs. Build with CMake (see CMakeLists.txt) after `dotnet run` of the sample.
+#include "game/Monster.tessera.hpp"
 
 #include <cstdint>
-#include <cstdio>
 #include <fstream>
+#include <iostream>
 #include <vector>
 
 int main(int argc, char** argv) {
-    const char* path = argc > 1 ? argv[1] : "monster.bin";
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    // Load the file into 8-byte aligned memory.
+    std::ifstream file(argc > 1 ? argv[1] : "monster.bin", std::ios::binary | std::ios::ate);
     if (!file) {
-        std::fprintf(stderr, "cannot open %s\n", path);
+        std::cerr << "cannot open the buffer\n";
         return 1;
     }
     const auto size = static_cast<std::size_t>(file.tellg());
-    std::vector<std::uint64_t> storage((size + 7) / 8);  // 8-byte aligned
+    std::vector<std::uint64_t> data((size + 7) / 8);
     file.seekg(0);
-    file.read(reinterpret_cast<char*>(storage.data()), static_cast<std::streamsize>(size));
+    file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));
 
-    tessera::Reader<game::Monster> reader(storage.data(), size);  // verifies the buffer
+    tessera::Reader<game::Monster> reader(data.data(), size);  // verifies the buffer once
     if (!reader) {
-        std::fprintf(stderr, "invalid buffer: %s\n", tessera::to_string(reader.error()));
+        std::cerr << "invalid buffer: " << tessera::to_string(reader.error()) << '\n';
         return 1;
     }
 
-    game::Monster m = reader.root();
-    std::printf("name: %.*s\n", static_cast<int>(m.name().size()), m.name().data());
-    std::printf("hp: %d (stored: %s)\n", m.hp(), m.has_hp() ? "yes" : "no, default");
-    if (auto mana = m.mana()) std::printf("mana: %d\n", *mana);
-    const game::Vec3& p = m.position();
-    std::printf("position: %g %g %g\n", p.x, p.y, p.z);
-    std::printf("faction: %d\n", static_cast<int>(m.faction()));
-    for (game::Weapon w : m.weapons()) std::printf("weapon: %.*s (%d)\n", static_cast<int>(w.name().size()), w.name().data(), w.damage());
-    if (game::Potion potion = m.loot().as_potion()) std::printf("loot: potion healing %d\n", potion.heal());
-    if (game::Key key = m.loot().as_key()) std::printf("loot: key for door %u\n", key.door());
-    std::printf("json: %s\n", tessera::to_json(m).c_str());
+    game::Monster orc = reader.root();  // a view: reads in place, nothing is parsed or copied
+    const game::Vec3& p = orc.position();
+    std::cout << orc.name() << ": hp " << orc.hp() << ", mana " << orc.mana().value_or(0)
+              << ", position " << p.x << ' ' << p.y << ' ' << p.z << '\n';
+    for (game::Weapon w : orc.weapons()) std::cout << "  " << w.name() << ": damage " << w.damage() << '\n';
     return 0;
 }

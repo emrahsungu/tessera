@@ -12,60 +12,109 @@
   No IDL, no parsing, and no allocations on the read side.
 </p>
 
-## 1. What is Tessera?
+## 1. Example
 
-Tessera is a serialization format and toolchain for moving structured data from .NET to C++. A Roslyn source generator
-turns ordinary C# classes, records and structs into allocation-free writers, and writes a readable C++20 header of
-view classes for the same types. C++ verifies a buffer once and then reads it where it lies: every accessor is a
-plain load.
+Your C# classes are the schema:
 
-```text
-C# models: plain classes, records and structs
-        │
-        │  source generator, at build time
-        ▼
-.NET writer ───► buffer: presence bits, inline values, forward offsets, optional schema
-                    │
-                    ▼
-          C++20 tessera::Reader<T>: verifies once
-                    │
-                    ▼
-          generated views: plain loads, no parse, no allocation
+```csharp
+namespace Game;
+
+public class Monster
+{
+    public string? Name;
+    public short Hp = 100;            // equal to its default: not stored
+    public int? Mana;                 // nullable: C++ can tell whether it was set
+    public Vec3 Position;             // plain struct: stored inline
+    public List<Weapon>? Weapons;
+}
+
+public class Weapon { public string? Name; public int Damage; }
+
+public record struct Vec3(float X, float Y, float Z);
 ```
 
-It was built for game tooling: UI prefabs, records, scene graphs and time series authored in .NET and loaded by a C++
-engine. The C# models are the schema, so both sides are generated from the same source and cannot drift apart. A
-buffer can also carry a compact schema of its own, so a reader built from an older or newer version of the models
-still reads it.
+Serialize one. That call is all the source generator needs: it writes a serializer for `Monster` and for every type
+`Monster` uses.
 
-## 2. Why should I care?
+```csharp
+using Game;
+using Tessera;
 
-Tessera combines properties that usually come from different libraries:
+var orc = new Monster
+{
+    Name = "Orc",
+    Mana = 25,
+    Position = new Vec3(1, 2, 3),
+    Weapons = [new() { Name = "Axe", Damage = 9 }, new() { Name = "Bow", Damage = 4 }],
+};
 
-- the zero-copy reads of FlatBuffers: no parse step, and data is read where it lies;
-- fast, compact writing straight from plain objects, without an IDL;
-- schema evolution by member name, with real absence: a member that was never set is not its default value.
+byte[] buffer = TesseraSerializer.Serialize(orc);
+File.WriteAllBytes("monster.bin", buffer);
+Console.WriteLine($"{buffer.Length} bytes");
+```
 
-What you get:
+```text
+328 bytes
+```
 
-- **Fast writes.** 7.6× faster than FlatBuffers and 2.1× faster than MessagePack-CSharp on the benchmark workloads
-  (geometric means), with no allocations besides the resulting array (with a reused writer, none at all).
-- **Fast, safe reads.** Verifying a buffer is 2.7–4.4× faster than FlatBuffers' verifier; verifying and then reading
-  every field is 1.7–2.1× faster (geometric means per compiler). After verification, every access is a plain load.
-- **Small buffers.** Default values and absent members take no space, and equal strings are stored once: buffers are
-  up to 70% smaller than FlatBuffers' (1.3× on the geometric mean).
-- **Your classes are the schema.** No IDL and no attributes: classes, records, structs, enums, nullable values,
-  lists, dictionaries, and abstract classes or interfaces as unions. Unsupported types are reported at compile time
-  with a suggested replacement.
-- **Readable C++.** One header per type, `std::optional` for nullable members, `std::string_view` for strings,
-  `enum class` with your names, and `const S&` straight into the buffer for plain structs.
-- **Schema evolution by name.** Add, delete, reorder and rename members anywhere, with no field ids or deprecated
-  slots; old and new readers keep working.
-- **Hardened.** About 450,000 fuzzed buffers per test run under GCC's AddressSanitizer and UBSan, MSVC and Clang, and
-  every change to the format or the reader is benchmarked against the commit before it.
-- **Apache-2.0** licensed.
+The same build writes a C++ header for each class. From `game/Monster.tessera.hpp` (shortened):
 
-## 3. 30-second example
+```cpp
+class Monster final : public tessera::Table<Monster> {
+public:
+    std::string_view            name() const noexcept;      // string? Name
+    std::int16_t                hp() const noexcept;        // short Hp = 100
+    std::optional<std::int32_t> mana() const noexcept;      // int? Mana
+    const Vec3&                 position() const noexcept;  // Vec3 Position
+    tessera::Vector<Weapon>     weapons() const noexcept;   // List<Weapon>? Weapons
+    // has_name(), has_hp() ...: whether each member was stored
+};
+```
+
+C++ verifies the buffer once, then reads it where it lies:
+
+```cpp
+#include "game/Monster.tessera.hpp"
+
+// data, size: the 328 bytes of monster.bin, in 8-byte aligned memory
+tessera::Reader<game::Monster> reader(data, size);  // verifies the buffer once
+if (!reader) return 1;
+
+game::Monster orc = reader.root();  // a view: reads in place, nothing is parsed or copied
+const game::Vec3& p = orc.position();
+std::cout << orc.name() << ": hp " << orc.hp() << ", mana " << orc.mana().value_or(0)
+          << ", position " << p.x << ' ' << p.y << ' ' << p.z << '\n';
+for (game::Weapon w : orc.weapons()) std::cout << "  " << w.name() << ": damage " << w.damage() << '\n';
+```
+
+```text
+Orc: hp 100, mana 25, position 1 2 3
+  Axe: damage 9
+  Bow: damage 4
+```
+
+`hp` was not stored, because it equaled its default, so C++ returned the default compiled into its header. A view is
+one pointer into the buffer: keep the buffer (and the `Reader`) alive while you use it. The whole example, including
+loading the file, is in [samples/Quickstart](samples/Quickstart).
+
+### What the 328 bytes hold
+
+| Part | Bytes | Contents |
+|---|---:|---|
+| Header | 16 | root offset, magic, format version, layout fingerprint |
+| Data | 88 | the orc (28), the weapon list (12), two weapons (12 each) and three strings (8 each) |
+| Schema | 224 | the hashed member names and the layouts of `Monster`, `Weapon`, `Vec3` and the list |
+
+The schema lets readers built from older or newer versions of these classes read the buffer: add, delete or reorder
+members whenever you like (see [Schema evolution](#schema-evolution)). Its size depends on the types, not on the data,
+so it only matters for small buffers. When the writer and the reader are always built from the same classes, leave it
+out:
+
+```csharp
+byte[] small = TesseraSerializer.Serialize(orc, new TesseraOptions { IncludeSchema = false });  // 104 bytes
+```
+
+## 2. Getting started
 
 Tessera is not on nuget.org yet, so build the package once:
 
@@ -86,71 +135,34 @@ go:
 </PropertyGroup>
 ```
 
+In C++, add that folder to the include path. `game/Monster.tessera.hpp` includes what `Monster` needs, and the header
+named after the assembly (`<AssemblyName>.tessera.hpp`) includes every model type. The runtime is header-only C++20.
+Buffers must start at an 8-byte aligned address, as memory from `new`, `malloc` or a `std::vector<std::uint64_t>` does.
+
 NuGet caches packages by version: after repacking the same version, delete `~/.nuget/packages/tessera`.
 
-Write your models as ordinary classes, records and structs (no attributes, base classes or IDs) and serialize them:
+## 3. Why Tessera
 
-```csharp
-using Tessera;
+Tessera was built for game tooling: UI prefabs, records, scene graphs and time series authored in .NET and loaded by a
+C++ engine. Both sides are generated from the same C# source, so they cannot drift apart.
 
-namespace Game;
-
-public enum Faction : byte { Neutral, Red, Blue }
-public struct Vec3 { public float X, Y, Z; }          // plain struct: stored inline
-
-public class Monster
-{
-    public string? Name;
-    public short Hp = 100;                            // equal to its default: not stored
-    public int? Mana;                                 // nullable: absence is visible in C++
-    public Vec3 Position;
-    public Faction Faction;
-    public List<Weapon>? Weapons;
-    public Item? Loot;                                // abstract: a union of the classes deriving from it
-}
-
-public class Weapon { public string? Name; public int Damage; }
-public abstract class Item { }
-public sealed class Potion : Item { public int Heal; }
-public sealed class Key : Item { public uint Door; }
-
-// ...
-byte[] bytes = TesseraSerializer.Serialize(monster);
-
-// Or allocation-free, reusing a writer:
-var writer = new TesseraWriter();
-ReadOnlySpan<byte> span = TesseraSerializer.Write(writer, monster);
-```
-
-Serializing a `Monster` is what makes it a model: the generator follows its members to `Weapon`, `Vec3`, `Faction`
-and the classes deriving from `Item`. An attribute is only needed for models that the project never serializes with
-a known type, such as types only C++ reads (see [Which types are models](#which-types-are-models)).
-
-Read it in C++, with `cpp/generated` on the include path. The header that includes every model type is named after
-the assembly (here `Game`):
-
-```cpp
-#include "Game.tessera.hpp"   // or only one type: "game/Monster.tessera.hpp"
-
-// data must be 8-byte aligned (from std::vector<std::uint64_t>, new or malloc, for example)
-tessera::Reader<game::Monster> reader(data, size);            // verifies the buffer
-if (!reader) return fail(tessera::to_string(reader.error()));
-
-game::Monster m = reader.root();
-std::string_view name = m.name();
-std::int16_t hp = m.hp();                                   // 100 when it was not stored
-if (std::optional<std::int32_t> mana = m.mana()) use(*mana);
-const game::Vec3& pos = m.position();                       // points into the buffer
-for (game::Weapon w : m.weapons()) use(w.name(), w.damage());
-if (game::Potion p = m.loot().as_potion()) use(p.heal());
-```
-
-Views are two pointers: keep the buffer (and the `Reader`) alive while you use them. A complete, buildable version is
-in [samples/Quickstart](samples/Quickstart).
-
-Change the models whenever you like: add, delete or reorder members, and rename one with `[TesseraName("OldName")]`.
-Buffers carry a compact schema, so readers built from older or newer models still read them (see
-[Schema evolution](#schema-evolution)).
+- **Your classes are the schema.** No IDL and no required attributes: classes, records, structs, enums, nullable
+  values, lists, dictionaries, and abstract classes or interfaces as unions. Unsupported types are reported at compile
+  time with a suggested replacement.
+- **Zero-copy reads.** After one verification pass, every access is a plain load: no parsing, no allocations.
+- **Readable C++.** One header per type, `std::optional` for nullable members, `std::string_view` for strings,
+  `enum class` with your names, and `const S&` straight into the buffer for plain structs.
+- **Fast.** Writes are 7.6× faster than FlatBuffers and 2.1× faster than MessagePack-CSharp, with no allocations
+  besides the resulting array (with a reused writer, none at all). Verifying a buffer is 2.7–4.4× faster than
+  FlatBuffers' verifier; verifying and then reading every field is 1.7–2.1× faster. Geometric means over the
+  benchmark workloads (per compiler for C++); see [Performance](#4-performance).
+- **Compact.** Absent members and default values take no space, and equal strings are stored once: buffers are up to
+  70% smaller than FlatBuffers' (1.3× on the geometric mean).
+- **Schema evolution by name.** Add, delete, reorder and rename members anywhere, with no field ids or deprecated
+  slots; old and new readers keep working.
+- **Hardened.** About 450,000 fuzzed buffers per test run under GCC's AddressSanitizer and UBSan, MSVC and Clang, and
+  every change to the format or the reader is benchmarked against the commit before it.
+- **Apache-2.0** licensed.
 
 ## 4. Performance
 
@@ -247,7 +259,25 @@ It writes every table to [docs/BENCHMARKS.md](docs/BENCHMARKS.md), the raw sampl
 these charts to `docs/images/benchmarks`. Every change to the format or the reader is also measured against the
 commit before it with `scripts/ab.ps1` (see [How to build](#how-to-build)).
 
-## 5. Architecture
+## 5. How it works
+
+A Roslyn source generator turns ordinary C# classes, records and structs into allocation-free writers, and writes a
+readable C++20 header of view classes for the same types. C++ verifies a buffer once and then reads it where it lies:
+every accessor is a plain load.
+
+```text
+C# models: plain classes, records and structs
+        │
+        │  source generator, at build time
+        ▼
+.NET writer ───► buffer: presence bits, inline values, forward offsets, optional schema
+                    │
+                    ▼
+          C++20 tessera::Reader<T>: verifies once
+                    │
+                    ▼
+          generated views: plain loads, no parse, no allocation
+```
 
 ### Presence bits instead of a vtable
 
@@ -340,6 +370,23 @@ setter or must be auto-properties. Leave a member out with `[TesseraIgnore]`, `[
 `DateTime`, `Guid`, `decimal` and similar types have no portable C++ form; they are reported at compile time with a
 suggested replacement (for example `DateTime.Ticks` as a `long`).
 
+### Unions
+
+A member whose type is an abstract class or an interface holds any of the classes that derive from it or implement it:
+
+```csharp
+public abstract class Item { }
+public sealed class Potion : Item { public int Heal; }
+public sealed class Key : Item { public uint Door; }
+
+public class Chest { public Item? Loot; }
+```
+
+```cpp
+if (game::Potion potion = chest.loot().as_potion()) use(potion.heal());
+else if (game::Key key = chest.loot().as_key()) use(key.door());
+```
+
 ### Which types are models
 
 A class, record or struct is a model when its project does one of these:
@@ -425,10 +472,11 @@ breaks old buffers. In Tessera:
 - **Reorder members freely**, and turn fields into properties or back. The layout does not depend on declaration
   order (cells are sorted by alignment, size and name hash), so the layout and the fingerprint stay the same, and
   readers built from either version keep using compile-time positions.
-- **Add and delete members anywhere.** Each buffer carries a compact schema, about 12 bytes per member, which you can
-  turn off. A reader built from other models matches members by name through it, once per buffer, and translates the
-  buffer into its own layout. Members missing from a buffer read as absent, with the reader's default (a
-  `[TesseraKeepDefault]` member is always stored, so it reads as present, with its default).
+- **Add and delete members anywhere.** Each buffer carries a compact schema, 12 bytes per member and about 32 per type
+  (224 bytes in the [example](#1-example)), which you can turn off. A reader built from other models matches members
+  by name through it, once per buffer, and translates the buffer into its own layout. Members missing from a buffer
+  read as absent, with the reader's default (a `[TesseraKeepDefault]` member is always stored, so it reads as present,
+  with its default).
 - **Rename** a member by keeping its wire name: `[TesseraName("OldName")]`.
 - **Changing a member's kind** makes it a different member: readers of the other version see it as absent. A
   dictionary whose value type changes keeps its keys and has no values there; one whose key type changes is empty.
@@ -450,6 +498,13 @@ model versions are in [tests/Tessera.Tests/Evolution.cs](tests/Tessera.Tests/Evo
 | `IncludeSchema` | `true` | embed the schema so other model versions can read the buffer |
 | `WriteDefaults` | `false` | also store members equal to their default |
 | `MaxDepth` | `128` | nesting limit (objects and vectors); matches C++ `Options::max_depth` |
+
+To write without allocating, reuse a writer. The span points into the writer and is valid until its next use:
+
+```csharp
+var writer = new TesseraWriter();                          // or new TesseraWriter(options)
+ReadOnlySpan<byte> span = TesseraSerializer.Write(writer, orc);
+```
 
 ### Dictionaries
 
@@ -544,7 +599,7 @@ sides as the noise control.
 | `cpp/include/tessera` | C++20 header-only runtime: views, verifier, schema translation, JSON dump |
 | `tests` | .NET tests, generator tests, C++ interop, fuzz and UTF-8 tests |
 | `benchmarks` | the Tessera / FlatBuffers / MessagePack benchmark (C# writers, C++ readers) |
-| `samples/Quickstart` | the example above, end to end |
+| `samples/Quickstart` | the example at the top of this page, end to end |
 | `docs` | [wire format](docs/FORMAT.md), [benchmark results](docs/BENCHMARKS.md) and their raw data, the README's charts |
 
 ## Third-party components
