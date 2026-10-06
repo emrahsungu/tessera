@@ -27,7 +27,7 @@ public static class Report
         sb.AppendLine($"- Libraries: Tessera {env.GetProperty("tessera").GetString()}, FlatBuffers {env.GetProperty("flatbuffers").GetString()}, MessagePack-CSharp {env.GetProperty("messagepack").GetString()}, msgpack-cxx 9.0.0");
         sb.AppendLine($"- Recorded {env.GetProperty("timestamp_utc").GetString()}. Medians of interleaved rounds; ±MAD in the raw JSON.");
         sb.AppendLine();
-        sb.AppendLine("Every reader computes a checksum over every field (presence included) and must match the value computed from the C# objects before anything is timed.");
+        sb.AppendLine("Every reader computes a checksum over every field (presence included) and must match the value computed from the C# objects before anything is timed. The C++ readers' small helper functions are force-inlined with MSVC, for all three libraries: MSVC stopped inlining them into one large function when it read Tessera (`benchmarks/native/readers.hpp` explains).");
         sb.AppendLine();
 
         var sizes = dotnet.RootElement.GetProperty("sizes").EnumerateArray()
@@ -222,9 +222,9 @@ public static class Report
         var reads = new (string Prefix, string Title, string Why)[]
         {
             ("verify", "Verify", ""),
-            ("full traversal", "Reading every field", "Every member's presence bit is tested, and compilers differ in how many branches they make of these checks: MSVC makes more than Clang on union-heavy objects such as prefab's, for the same source."),
+            ("full traversal", "Reading every field", "Tessera tests each member's presence bit and finds a present member's cell with popcounts or table loads; FlatBuffers reads each member's position from the object's vtable."),
             ("verify + traversal", "Verify, then read every field", ""),
-            ("random access x1000", "Random reads", "A member's position is a popcount over the presence bits of the members before it, so in wide objects (prefab, monsters) a late member takes a few more instructions than FlatBuffers' vtable lookup."),
+            ("random access x1000", "Random reads", "A member's position is computed from the presence bits of the members before it (a popcount per run of equal-size cells, or a table load per byte of presence bits), which can take a few more instructions than FlatBuffers' vtable lookup."),
             ("open + read one field", "Opening a buffer and reading one field", OpenRange(natives)),
             ("1000 lookups by string", "Dictionary lookups by string", ""),
             ("1000 lookups by int", "Dictionary lookups by int", ""),

@@ -48,10 +48,10 @@ Tessera combines properties that usually come from different libraries:
 
 What you get:
 
-- **Fast writes.** 6.8× faster than FlatBuffers and 1.9× faster than MessagePack-CSharp on the benchmark workloads
+- **Fast writes.** 7.6× faster than FlatBuffers and 2.1× faster than MessagePack-CSharp on the benchmark workloads
   (geometric means), with no allocations besides the resulting array (with a reused writer, none at all).
-- **Fast, safe reads.** Verifying a buffer is 2.6–4.0× faster than FlatBuffers' verifier; verifying and then reading
-  every field is 1.6–2.0× faster (geometric means per compiler). After verification, every access is a plain load.
+- **Fast, safe reads.** Verifying a buffer is 2.7–4.4× faster than FlatBuffers' verifier; verifying and then reading
+  every field is 1.7–2.1× faster (geometric means per compiler). After verification, every access is a plain load.
 - **Small buffers.** Default values and absent members take no space, and equal strings are stored once: buffers are
   up to 70% smaller than FlatBuffers' (1.3× on the geometric mean).
 - **Your classes are the schema.** No IDL and no attributes: classes, records, structs, enums, nullable values,
@@ -169,14 +169,14 @@ every field.
 
 | Workload | .NET write | Size | Safe read, Clang | Safe read, GCC | Safe read, MSVC |
 |---|---:|---:|---:|---:|---:|
-| prefab | 3.99× | 1.28× | 1.53× | 2.14× | 1.47× |
-| monsters | 4.65× | 1.18× | 1.44× | 1.64× | 1.41× |
-| records | 30.71× | 3.37× | 2.43× | 2.65× | 3.17× |
-| series | 4.57× | 1.00× | 1.79× | 1.72× | 1.60× |
-| dense-unique | 3.64× | 1.06× | 1.46× | 1.95× | 1.34× |
-| sparse-unique | 5.40× | 1.04× | 1.73× | 1.97× | 1.67× |
-| dense-shared | 5.36× | 1.32× | 1.44× | 1.95× | 1.33× |
-| lookup | 16.11× | 1.16× | 2.34× | 2.33× | 1.60× |
+| prefab | 4.33× | 1.28× | 1.54× | 2.19× | 1.72× |
+| monsters | 4.37× | 1.18× | 1.49× | 1.68× | 1.45× |
+| records | 30.48× | 3.37× | 2.51× | 2.76× | 3.37× |
+| series | 4.70× | 1.00× | 1.89× | 1.96× | 1.69× |
+| dense-unique | 4.47× | 1.06× | 1.45× | 2.10× | 1.32× |
+| sparse-unique | 6.29× | 1.04× | 1.75× | 2.19× | 1.73× |
+| dense-shared | 5.56× | 1.32× | 1.45× | 2.10× | 1.32× |
+| lookup | 25.77× | 1.16× | 2.34× | 2.29× | 1.59× |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmarks/summary-dark.svg">
@@ -225,15 +225,15 @@ smaller on the prefab and the sparse records. Tessera keeps values fixed-width s
 
 ### Where Tessera is slower
 
-- **Random reads of the wide prefab objects** with GCC (1.24× slower) and Clang (1.16×), and of the monsters with
-  Clang (1.07×). Locating a member preceded by many members of other sizes takes a few more instructions than a
-  vtable lookup. With MSVC, reading single nodes of the repeated scene is 1.07× slower.
-- **Reading every field of the union-heavy prefab with MSVC:** 1.27× slower. MSVC does not inline the benchmark's
-  small helper functions into the large function that reads the five component types. With Clang and GCC, the same
-  code runs as fast as FlatBuffers.
-- **Opening a buffer and reading one field:** both take 4–9 ns; with GCC, FlatBuffers is 0.5 ns faster on the prefab.
-- **Writing dictionaries:** 1.5× slower than MessagePack, which writes the entries as they come (and can then only
-  scan them). FlatBuffers stores them sorted too, and is 16× slower than Tessera.
+- **Size, against MessagePack**, on six of the eight workloads (1.11–1.70×): MessagePack stores small integers in one
+  or two bytes; Tessera keeps values fixed-width so that they can be read in place.
+- **Time: nowhere by more than 1%.** Three GCC rows are within 1% of FlatBuffers: reading every field of the dense and
+  sparse scenes (there, all three libraries run at the speed of the benchmark's checksum) and random reads of the
+  records. MessagePack's C++ traversals and random reads run over a tree parsed beforehand, so they are not compared.
+
+With MSVC, the C++ readers' small helper functions are force-inlined, for all three libraries: MSVC stopped inlining
+them into one large function when it read Tessera, which made reading every field of the prefab 24% slower.
+FlatBuffers' and MessagePack's code does not change ([benchmarks/native/readers.hpp](benchmarks/native/readers.hpp)).
 
 The full list, computed from the results, is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
@@ -277,7 +277,7 @@ vectors, objects and union members sit behind forward offsets.
 
 Members marked `[TesseraKeepDefault]` (scalars, enums and plain structs) are always stored, so they need no presence
 bit: they come first, at constant positions, and reading one is a single load. On the time series workload, that makes
-random reads 18–35% faster and verification 7–40% faster, at the same size.
+random reads 20–33% faster and verification up to 7% faster, at the same size.
 
 ### Written back to front
 
