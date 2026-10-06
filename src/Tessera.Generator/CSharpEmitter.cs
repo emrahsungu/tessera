@@ -322,9 +322,15 @@ namespace Tessera.Generator
             // Strings by code point: the order of their UTF-8 bytes, which is how C++ compares them.
             _w.Line(map.Key.Kind == WireKind.String ? "TesseraMapKeys.SortUtf8(keys, values, count);" : "TesseraMapKeys.Sort(keys, values, count);");
             _w.Line($"int rValues = {VectorHelper(values.Value)}(w, new global::System.ReadOnlySpan<{map.CsValueType}>(values, 0, count));");
-            _w.Line($"int rKeys = {VectorHelper(keys.Value)}(w, new global::System.ReadOnlySpan<{map.CsKeyType}>(keys, 0, count));");
-            _w.Line($"{keyPool}.Return(keys, clearArray: {(map.Key.IsReferenceType ? "true" : "false")});");
-            _w.Line($"{valuePool}.Return(values, clearArray: {(map.Value.IsReferenceType ? "true" : "false")});");
+            // Keys are distinct: string keys can skip the sharing lookup while nothing they could equal has been written.
+            _w.Line(map.Key.Kind == WireKind.String
+                ? "int rKeys = w.WriteDistinctStrings(new global::System.ReadOnlySpan<string>(keys, 0, count));"
+                : $"int rKeys = {VectorHelper(keys.Value)}(w, new global::System.ReadOnlySpan<{map.CsKeyType}>(keys, 0, count));");
+            // References are cleared (up to count) so that the pool does not keep the entries alive.
+            if (map.Key.IsReferenceType) _w.Line("global::System.Array.Clear(keys, 0, count);");
+            if (map.Value.IsReferenceType) _w.Line("global::System.Array.Clear(values, 0, count);");
+            _w.Line($"{keyPool}.Return(keys);");
+            _w.Line($"{valuePool}.Return(values);");
             // Both cells are always present (an empty dictionary has empty vectors).
             _w.Line("ref byte o = ref w.BeginObject(12, 8, 4);");
             _w.Line("int at = w.Position;");

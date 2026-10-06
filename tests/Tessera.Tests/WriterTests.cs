@@ -137,6 +137,30 @@ public class WriterTests
         Assert.Empty(none);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DictionaryKeysShareWithOtherStrings(bool keysFirst)
+    {
+        // A key equal to a string written before it, and one equal to a string written after it, are stored once.
+        var catalog = keysFirst
+            ? new Catalog { Nested = new() { ["apple"] = new() { ["apple"] = 1 } } }   // the inner dictionary is written first
+            : new Catalog { Stock = new() { ["apple"] = 1, ["pear"] = 2 }, Names = new() { [1] = "apple", [2] = "pear" } };
+        byte[] shared = TesseraSerializer.Serialize(catalog);
+        byte[] separate = TesseraSerializer.Serialize(catalog, new TesseraOptions { Sharing = Sharing.None });
+        Assert.Equal(1, Count(shared, "apple"));
+        Assert.Equal(2, Count(separate, "apple"));
+        Assert.Equal(TesseraSerializer.Serialize(catalog), shared);   // the reused writer starts clean
+
+        static int Count(byte[] buffer, string s)
+        {
+            byte[] item = BitConverter.GetBytes(s.Length).Concat(System.Text.Encoding.UTF8.GetBytes(s)).Append((byte)0).ToArray();
+            int n = 0;
+            for (int i = buffer.AsSpan().IndexOf(item); i >= 0; i = buffer.AsSpan(i + 1).IndexOf(item) is int j && j >= 0 ? i + 1 + j : -1) n++;
+            return n;
+        }
+    }
+
     [Fact]
     public void SharingLevelsTradeSizeForSpeed()
     {

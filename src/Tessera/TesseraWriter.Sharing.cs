@@ -8,6 +8,8 @@ namespace Tessera;
 public sealed partial class TesseraWriter
 {
     private readonly Dictionary<string, int> _strings = new();
+    private (string Value, int Pos)[] _pendingStrings = Array.Empty<(string, int)>();  // written, not yet in _strings
+    private int _pendingCount;
     private Entry[] _entries = new Entry[256];
     private int _entryCount;
     private int[] _slots = new int[512];
@@ -24,6 +26,11 @@ public sealed partial class TesseraWriter
     private void ResetSharing()
     {
         _strings.Clear();
+        if (_pendingCount != 0)
+        {
+            Array.Clear(_pendingStrings, 0, _pendingCount);
+            _pendingCount = 0;
+        }
         if (_entryCount != 0)
         {
             Array.Clear(_slots);

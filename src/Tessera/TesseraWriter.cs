@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
@@ -68,7 +69,13 @@ public sealed partial class TesseraWriter
     public ReadOnlySpan<byte> WrittenSpan => _finished ? _buf.AsSpan(_head) : throw new InvalidOperationException("Call Finish first.");
 
     /// <summary>The finished buffer as a new array.</summary>
-    public byte[] ToArray() => WrittenSpan.ToArray();
+    public byte[] ToArray()
+    {
+        ReadOnlySpan<byte> written = WrittenSpan;
+        byte[] copy = GC.AllocateUninitializedArray<byte>(written.Length);  // every byte is overwritten: no zeroing
+        written.CopyTo(copy);
+        return copy;
+    }
 
     /// <summary>Clears the writer for a new buffer, keeping its memory.</summary>
     public void Reset()
@@ -163,6 +170,7 @@ public sealed partial class TesseraWriter
     public int WriteString(string value)
     {
         if (!_shareStrings) return WriteStringBytes(value);
+        if (_pendingCount != 0) AddPendingStrings();
         // One lookup: the entry is added here and set once the string is written. (A write that throws abandons the
         // buffer, and the next one starts with Reset.)
         ref int known = ref CollectionsMarshal.GetValueRefOrAddDefault(_strings, value, out bool exists);
@@ -170,8 +178,63 @@ public sealed partial class TesseraWriter
         return known = WriteStringBytes(value);
     }
 
+    /// <summary>
+    /// Writes a vector of distinct strings (a dictionary's keys) and returns its position. Before any other string is
+    /// written, they cannot equal an earlier one, so they skip the sharing lookup; they are added to it only when a
+    /// later string is looked up, so equal strings are still stored once.
+    /// </summary>
+    public int WriteDistinctStrings(ReadOnlySpan<string> values)
+    {
+        Enter();
+        int n = values.Length;
+        int slot = PushRefs(n);
+        if (_shareStrings && _strings.Count == 0 && _pendingCount == 0)
+        {
+            if (_pendingStrings.Length < n) _pendingStrings = new (string, int)[Math.Max(n, 2 * _pendingStrings.Length)];
+            for (int i = n - 1; i >= 0; i--)
+            {
+                string value = values[i];
+                if (value is null)
+                {
+                    SetRef(slot + i, 0);
+                    continue;
+                }
+
+                int pos = WriteStringBytes(value);
+                _pendingStrings[_pendingCount++] = (value, pos);
+                SetRef(slot + i, pos);
+            }
+        }
+        else
+        {
+            for (int i = n - 1; i >= 0; i--) SetRef(slot + i, values[i] is { } value ? WriteString(value) : 0);
+        }
+
+        Exit();
+        return WriteRefVector(slot, n);
+    }
+
+    private void AddPendingStrings()
+    {
+        for (int i = 0; i < _pendingCount; i++) _strings.TryAdd(_pendingStrings[i].Value, _pendingStrings[i].Pos);
+        Array.Clear(_pendingStrings, 0, _pendingCount);
+        _pendingCount = 0;
+    }
+
     private int WriteStringBytes(string value)
     {
+        // ASCII, the common case, in one pass: room for one byte per char, then a narrowing copy that stops at the
+        // first other char (that string is then written again, exactly sized).
+        int length = value.Length;
+        ref byte a = ref Reserve(4 + length + 1, 4, 4 + length + 1);
+        if (Ascii.FromUtf16(value, MemoryMarshal.CreateSpan(ref Unsafe.Add(ref a, 4), length), out _) == OperationStatus.Done)
+        {
+            Unsafe.WriteUnaligned(ref a, (uint)length);
+            Unsafe.Add(ref a, 4 + length) = 0;
+            return Position;
+        }
+
+        Rollback();
         int byteCount = Encoding.UTF8.GetByteCount(value);
         int size = 4 + byteCount + 1;
         ref byte p = ref Reserve(size, 4, size);

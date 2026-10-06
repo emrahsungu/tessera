@@ -32,7 +32,8 @@ public static class TesseraSerializer
     public static byte[] Serialize<T>(T value, TesseraOptions? options = null)
     {
         TesseraWriter writer = Rent(options);
-        return Write(writer, value).ToArray();
+        Write(writer, value);
+        return writer.ToArray();
     }
 
     /// <summary>Serializes <paramref name="value"/> into <paramref name="output"/>.</summary>
