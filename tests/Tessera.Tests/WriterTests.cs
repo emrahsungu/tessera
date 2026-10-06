@@ -140,11 +140,11 @@ public class WriterTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void DictionaryKeysShareWithOtherStrings(bool keysFirst)
+    public void DictionaryKeysShareWithOtherStrings(bool nested)
     {
         // A key equal to a string written before it, and one equal to a string written after it, are stored once.
-        var catalog = keysFirst
-            ? new Catalog { Nested = new() { ["apple"] = new() { ["apple"] = 1 } } }   // the inner dictionary is written first
+        var catalog = nested
+            ? new Catalog { Nested = new() { ["apple"] = new() { ["apple"] = 1 } } }   // outer keys first, then the inner dictionary
             : new Catalog { Stock = new() { ["apple"] = 1, ["pear"] = 2 }, Names = new() { [1] = "apple", [2] = "pear" } };
         byte[] shared = TesseraSerializer.Serialize(catalog);
         byte[] separate = TesseraSerializer.Serialize(catalog, new TesseraOptions { Sharing = Sharing.None });
@@ -158,6 +158,29 @@ public class WriterTests
             int n = 0;
             for (int i = buffer.AsSpan().IndexOf(item); i >= 0; i = buffer.AsSpan(i + 1).IndexOf(item) is int j && j >= 0 ? i + 1 + j : -1) n++;
             return n;
+        }
+    }
+
+    [Fact]
+    public void DictionaryKeysOutOfOrderAreWrittenSorted()
+    {
+        // Keys are checked while they are written; out of order, the ones written so far are taken back and the
+        // dictionary is written sorted, still sharing a key with an equal string elsewhere.
+        var catalog = new Catalog
+        {
+            Stock = new() { ["pear"] = 2, ["zebra"] = 3, ["apple"] = 1 },
+            Names = new() { [1] = "apple", [2] = "kiwi" },
+        };
+        foreach (var options in new[] { TesseraOptions.Default, new TesseraOptions { Sharing = Sharing.None }, new TesseraOptions { Sharing = Sharing.All } })
+        {
+            byte[] b = TesseraSerializer.Serialize(catalog, options);
+            var stock = (Dictionary<ulong, object?>)Read(b)[Hash("Stock")]!;
+            Assert.Equal(new object?[] { "apple", "pear", "zebra" }, (List<object?>)stock[Hash("Keys")]!);
+            Assert.Equal(new object?[] { 1, 2, 3 }, (List<object?>)stock[Hash("Values")]!);
+            int apples = 0;
+            byte[] apple = { 5, 0, 0, 0, (byte)'a', (byte)'p', (byte)'p', (byte)'l', (byte)'e', 0 };
+            for (int i = 0; i + apple.Length <= b.Length; i++) if (b.AsSpan(i, apple.Length).SequenceEqual(apple)) apples++;
+            Assert.Equal(options.Sharing == Sharing.None ? 2 : 1, apples);
         }
     }
 

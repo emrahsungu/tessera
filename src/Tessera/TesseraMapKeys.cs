@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Tessera;
 
@@ -52,15 +55,27 @@ public static class TesseraMapKeys
         public int Compare(string? x, string? y) => CompareCodePoints(x, y);
     }
 
-    private static int CompareCodePoints(string? x, string? y)
+    internal static int CompareCodePoints(string? x, string? y)
     {
         if (ReferenceEquals(x, y)) return 0;
         if (x is null) return -1;
         if (y is null) return 1;
-        int i = x.AsSpan().CommonPrefixLength(y);
-        if (i == x.Length || i == y.Length) return x.Length - y.Length;
-        return CodePointRank(x[i]) - CodePointRank(y[i]);
+        // Four chars at a time (keys are short): the lowest set bit of the difference is in the first differing char.
+        int n = Math.Min(x.Length, y.Length), i = 0;
+        ref byte a = ref Unsafe.As<char, byte>(ref MemoryMarshal.GetReference(x.AsSpan()));
+        ref byte b = ref Unsafe.As<char, byte>(ref MemoryMarshal.GetReference(y.AsSpan()));
+        for (; i + 4 <= n; i += 4)
+        {
+            ulong d = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref a, 2 * i)) ^ Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref b, 2 * i));
+            if (d != 0) return Differ(x, y, i + BitOperations.TrailingZeroCount(d) / 16);
+        }
+
+        for (; i < n; i++)
+            if (x[i] != y[i]) return Differ(x, y, i);
+        return x.Length - y.Length;
     }
+
+    private static int Differ(string x, string y, int i) => CodePointRank(x[i]) - CodePointRank(y[i]);
 
     // Surrogates (code points from U+10000) sort after U+E000..U+FFFF in code point order but before them in UTF-16.
     private static int CodePointRank(char c) => c < 0xD800 ? c : c >= 0xE000 ? c - 0x800 : c + 0x2000;

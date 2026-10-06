@@ -319,13 +319,20 @@ namespace Tessera.Generator
             _w.Line("values[count++] = kv.Value;");
             _w.Close();
             _w.Close();
-            // Strings by code point: the order of their UTF-8 bytes, which is how C++ compares them.
-            _w.Line(map.Key.Kind == WireKind.String ? "TesseraMapKeys.SortUtf8(keys, values, count);" : "TesseraMapKeys.Sort(keys, values, count);");
-            _w.Line($"int rValues = {VectorHelper(values.Value)}(w, new global::System.ReadOnlySpan<{map.CsValueType}>(values, 0, count));");
-            // Keys are distinct: string keys can skip the sharing lookup while nothing they could equal has been written.
-            _w.Line(map.Key.Kind == WireKind.String
-                ? "int rKeys = w.WriteDistinctStrings(new global::System.ReadOnlySpan<string>(keys, 0, count));"
-                : $"int rKeys = {VectorHelper(keys.Value)}(w, new global::System.ReadOnlySpan<{map.CsKeyType}>(keys, 0, count));");
+            string writeValues = $"int rValues = {VectorHelper(values.Value)}(w, new global::System.ReadOnlySpan<{map.CsValueType}>(values, 0, count));";
+            if (map.Key.Kind == WireKind.String)
+            {
+                // Strings by code point (the order of their UTF-8 bytes, which is how C++ compares them), checked while
+                // the keys are written; then the values, in that order.
+                _w.Line("int rKeys = w.WriteMapKeys(keys, values, count);");
+                _w.Line(writeValues);
+            }
+            else
+            {
+                _w.Line("TesseraMapKeys.Sort(keys, values, count);");
+                _w.Line(writeValues);
+                _w.Line($"int rKeys = {VectorHelper(keys.Value)}(w, new global::System.ReadOnlySpan<{map.CsKeyType}>(keys, 0, count));");
+            }
             // References are cleared (up to count) so that the pool does not keep the entries alive.
             if (map.Key.IsReferenceType) _w.Line("global::System.Array.Clear(keys, 0, count);");
             if (map.Value.IsReferenceType) _w.Line("global::System.Array.Clear(values, 0, count);");

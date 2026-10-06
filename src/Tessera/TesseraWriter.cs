@@ -179,39 +179,58 @@ public sealed partial class TesseraWriter
     }
 
     /// <summary>
-    /// Writes a vector of distinct strings (a dictionary's keys) and returns its position. Before any other string is
-    /// written, they cannot equal an earlier one, so they skip the sharing lookup; they are added to it only when a
-    /// later string is looked up, so equal strings are still stored once.
+    /// Writes a dictionary's string keys as a vector in code point order (the order C++ binary-searches) and returns
+    /// its position; keys out of that order are first sorted, together with <paramref name="values"/>. The order is
+    /// checked while the keys are written, so each key is read once (after an inversion, the keys written so far are
+    /// taken back). The keys of a dictionary are distinct, so they are looked up only among the strings written before
+    /// them; new ones are added to the sharing lookup when a later string is written, so equal strings are still
+    /// stored once.
     /// </summary>
-    public int WriteDistinctStrings(ReadOnlySpan<string> values)
+    public int WriteMapKeys<TValue>(string[] keys, TValue[] values, int count)
+    {
+        if (_pendingCount != 0) AddPendingStrings();  // an earlier dictionary's keys: the lookups below must find them
+        int start = Position, refTop = _refTop;
+        if (WriteKeys(keys, count, checkOrder: true, out int position)) return position;
+        _head = _buf.Length - start;
+        _refTop = refTop;
+        Array.Clear(_pendingStrings, 0, _pendingCount);
+        _pendingCount = 0;
+        keys.AsSpan(0, count).Sort(values.AsSpan(0, count), TesseraMapKeys.Utf8Order);
+        WriteKeys(keys, count, checkOrder: false, out position);
+        return position;
+    }
+
+    private bool WriteKeys(string[] keys, int count, bool checkOrder, out int position)
     {
         Enter();
-        int n = values.Length;
-        int slot = PushRefs(n);
-        if (_shareStrings && _strings.Count == 0 && _pendingCount == 0)
+        int slot = PushRefs(count);
+        bool lookup = _shareStrings && _strings.Count != 0;
+        if (_shareStrings && _pendingStrings.Length < count) _pendingStrings = new (string, int)[Math.Max(count, 2 * _pendingStrings.Length)];
+        for (int i = count - 1; i >= 0; i--)
         {
-            if (_pendingStrings.Length < n) _pendingStrings = new (string, int)[Math.Max(n, 2 * _pendingStrings.Length)];
-            for (int i = n - 1; i >= 0; i--)
+            string key = keys[i];
+            if (checkOrder && i + 1 < count && TesseraMapKeys.CompareCodePoints(key, keys[i + 1]) >= 0)
             {
-                string value = values[i];
-                if (value is null)
-                {
-                    SetRef(slot + i, 0);
-                    continue;
-                }
-
-                int pos = WriteStringBytes(value);
-                _pendingStrings[_pendingCount++] = (value, pos);
-                SetRef(slot + i, pos);
+                Exit();
+                position = 0;
+                return false;
             }
-        }
-        else
-        {
-            for (int i = n - 1; i >= 0; i--) SetRef(slot + i, values[i] is { } value ? WriteString(value) : 0);
+
+            int pos;
+            if (key is null) pos = 0;
+            else if (lookup && _strings.TryGetValue(key, out int known)) pos = known;
+            else
+            {
+                pos = WriteStringBytes(key);
+                if (_shareStrings) _pendingStrings[_pendingCount++] = (key, pos);
+            }
+
+            SetRef(slot + i, pos);
         }
 
         Exit();
-        return WriteRefVector(slot, n);
+        position = WriteRefVector(slot, count);
+        return true;
     }
 
     private void AddPendingStrings()
