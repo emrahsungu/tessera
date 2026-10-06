@@ -341,21 +341,33 @@ template <class S, std::uint32_t Bit> consteval auto make_terms() {
     return r;
 }
 
-/// Population count. The instruction directly when the target has it (MSVC's std::popcount is several nested calls
-/// that use up its inlining budget for the caller's own functions).
-[[nodiscard]] TESSERA_ALWAYS_INLINE std::uint32_t popcount32(std::uint32_t x) noexcept {
+/// Integer type of cell offsets. GCC and Clang: pointer width, so that `p + offset` folds the scaling and the header
+/// size into the load's address instead of computing an offset first (fewer instructions per member, measured);
+/// MSVC: 32 bits (pointer width was slower there).
+#if defined(_MSC_VER) && !defined(__clang__)
+using cell_off_t = std::uint32_t;
+#else
+using cell_off_t = std::size_t;
+#endif
+
+/// Population count of a presence word, as a cell offset term. MSVC: the instruction directly when the target has it
+/// (its std::popcount is several nested calls that use up its inlining budget for the caller's own functions).
+[[nodiscard]] TESSERA_ALWAYS_INLINE cell_off_t popcount_cells(std::uint32_t x) noexcept {
 #if defined(_MSC_VER) && !defined(__clang__) && (defined(__AVX__) || defined(__AVX2__))
     return __popcnt(x);
+#elif defined(_MSC_VER) && !defined(__clang__)
+    return static_cast<cell_off_t>(std::popcount(x));
 #else
-    return static_cast<std::uint32_t>(std::popcount(x));
+    return static_cast<cell_off_t>(std::popcount(static_cast<std::uint64_t>(x)));
 #endif
 }
 
-template <class S, std::uint32_t Bit, std::size_t K> TESSERA_ALWAYS_INLINE std::uint32_t cell_term(const std::uint8_t* p) noexcept {
+template <class S, std::uint32_t Bit, std::size_t K> TESSERA_ALWAYS_INLINE cell_off_t cell_term(const std::uint8_t* p) noexcept {
     // Locals declared constexpr so every compiler emits the word offset, mask and size as immediates.
     constexpr Term t = make_terms<S, Bit>().t[K];
-    constexpr std::uint32_t word = 4u * t.word, mask = t.mask, size = t.size;
-    const std::uint32_t n = popcount32(load32(p + word) & mask);
+    constexpr std::uint32_t word = 4u * t.word, mask = t.mask;
+    constexpr cell_off_t size = t.size;
+    const cell_off_t n = popcount_cells(load32(p + word) & mask);
     if constexpr (size == 1) return n;
     else if constexpr ((size & (size - 1)) == 0) {
         constexpr int shift = std::countr_zero(size);
@@ -367,8 +379,8 @@ template <class S, std::uint32_t Bit, std::size_t K> TESSERA_ALWAYS_INLINE std::
 /// Header and fixed cells, plus the sizes of the present cells before presence bit `Bit` with one popcount per run of
 /// equal-size cells.
 template <class S, std::uint32_t Bit, std::size_t... K>
-TESSERA_ALWAYS_INLINE std::uint32_t cell_offset_terms([[maybe_unused]] const std::uint8_t* p, std::index_sequence<K...>) noexcept {
-    return 4u * S::words + S::fixed + (0u + ... + cell_term<S, Bit, K>(p));
+TESSERA_ALWAYS_INLINE cell_off_t cell_offset_terms([[maybe_unused]] const std::uint8_t* p, std::index_sequence<K...>) noexcept {
+    return cell_off_t{4u * S::words + S::fixed} + (cell_off_t{0} + ... + cell_term<S, Bit, K>(p));
 }
 
 /// The sizes of the present cells among one byte of presence bits, for each of its 256 values. Types with the same
@@ -425,7 +437,7 @@ TESSERA_ALWAYS_INLINE std::uint32_t cell_offset_tables(const std::uint8_t* p, st
 
 /// Byte offset (from the table start) of the cell of presence bit `Bit`: header and fixed cells, plus the sizes of all
 /// present cells before it.
-template <class S, std::uint32_t Bit> TESSERA_ALWAYS_INLINE std::uint32_t cell_offset(const std::uint8_t* p) noexcept {
+template <class S, std::uint32_t Bit> TESSERA_ALWAYS_INLINE cell_off_t cell_offset(const std::uint8_t* p) noexcept {
     if constexpr (use_tables<S>(Bit)) return cell_offset_tables<S, Bit>(p, std::make_index_sequence<(Bit + 7) / 8>{});
     else return cell_offset_terms<S, Bit>(p, std::make_index_sequence<term_count<S>(Bit)>{});
 }
