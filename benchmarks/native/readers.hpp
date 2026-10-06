@@ -17,18 +17,30 @@
 namespace im = bench::models;
 namespace fbm = Bench::Fb;
 
+// The small helpers below (and the checksum's members) are force-inlined with MSVC, for all three libraries alike.
+// MSVC stops inlining ordinary functions into a caller once the caller has grown past its inlining budget, and
+// with Tessera that happened in the large function that reads prefab's five component types: the helpers were
+// called, and the running checksum went through memory around every call (the traversal took 24% longer, measured).
+// FlatBuffers' and MessagePack's helpers were inlined there already, so their code does not change. Clang and GCC
+// inline these helpers by themselves.
+#if defined(_MSC_VER) && !defined(__clang__)
+#define BENCH_HELPER __forceinline
+#else
+#define BENCH_HELPER inline
+#endif
+
 constexpr std::uint64_t kAbsent = 0x9E3779B97F4A7C15ull;
 
 struct Checksum {
     std::uint64_t h = 0xCBF29CE484222325ull;
-    void mix(std::uint64_t v) noexcept { h = (h ^ v) * 0x100000001B3ull; }
-    void i(std::int64_t v) noexcept { mix(static_cast<std::uint64_t>(v)); }
-    void u(std::uint64_t v) noexcept { mix(v); }
-    void f(float v) noexcept { mix(std::bit_cast<std::uint32_t>(v)); }
-    void d(double v) noexcept { mix(std::bit_cast<std::uint64_t>(v)); }
-    void b(bool v) noexcept { mix(v ? 1u : 0u); }
-    void absent() noexcept { mix(kAbsent); }
-    void s(std::string_view v) noexcept {
+    BENCH_HELPER void mix(std::uint64_t v) noexcept { h = (h ^ v) * 0x100000001B3ull; }
+    BENCH_HELPER void i(std::int64_t v) noexcept { mix(static_cast<std::uint64_t>(v)); }
+    BENCH_HELPER void u(std::uint64_t v) noexcept { mix(v); }
+    BENCH_HELPER void f(float v) noexcept { mix(std::bit_cast<std::uint32_t>(v)); }
+    BENCH_HELPER void d(double v) noexcept { mix(std::bit_cast<std::uint64_t>(v)); }
+    BENCH_HELPER void b(bool v) noexcept { mix(v ? 1u : 0u); }
+    BENCH_HELPER void absent() noexcept { mix(kAbsent); }
+    BENCH_HELPER void s(std::string_view v) noexcept {
         mix(v.size());
         mix(v.empty() ? 0u : static_cast<std::uint8_t>(v[0]));
     }
@@ -38,29 +50,29 @@ struct Checksum {
 
 namespace tessera_read {
 
-inline void v2(Checksum& c, im::Vec2 v) { c.f(v.x); c.f(v.y); }
-inline void v3(Checksum& c, im::Vec3 v) { c.f(v.x); c.f(v.y); c.f(v.z); }
-inline void v4(Checksum& c, im::Vec4 v) { c.f(v.x); c.f(v.y); c.f(v.z); c.f(v.w); }
-inline void ref(Checksum& c, im::ObjectRef r) { c.u(r.component_name); c.i(r.index); c.i(r.object_ref_id); }
+BENCH_HELPER void v2(Checksum& c, im::Vec2 v) { c.f(v.x); c.f(v.y); }
+BENCH_HELPER void v3(Checksum& c, im::Vec3 v) { c.f(v.x); c.f(v.y); c.f(v.z); }
+BENCH_HELPER void v4(Checksum& c, im::Vec4 v) { c.f(v.x); c.f(v.y); c.f(v.z); c.f(v.w); }
+BENCH_HELPER void ref(Checksum& c, im::ObjectRef r) { c.u(r.component_name); c.i(r.index); c.i(r.object_ref_id); }
 
 // Absent strings are views with data() == nullptr (a present empty string points into the buffer).
-inline void str(Checksum& c, std::string_view s) {
+BENCH_HELPER void str(Checksum& c, std::string_view s) {
     if (s.data()) c.s(s);
     else c.absent();
 }
 
-inline void refs(Checksum& c, tessera::Vector<im::ObjectRef> v) {
+BENCH_HELPER void refs(Checksum& c, tessera::Vector<im::ObjectRef> v) {
     if (!v) { c.absent(); return; }
     c.u(v.size());
     for (im::ObjectRef r : v) ref(c, r);
 }
 
-inline void opt_ref(Checksum& c, std::optional<im::ObjectRef> r) {
+BENCH_HELPER void opt_ref(Checksum& c, std::optional<im::ObjectRef> r) {
     if (r) ref(c, *r);
     else c.absent();
 }
 
-inline void opt_bool(Checksum& c, std::optional<bool> b) {
+BENCH_HELPER void opt_bool(Checksum& c, std::optional<bool> b) {
     if (b) c.b(*b);
     else c.absent();
 }
@@ -208,7 +220,7 @@ inline std::uint64_t world(im::World w) {
     return c.h;
 }
 
-template <class T> inline void opt(Checksum& c, std::optional<T> v) {
+template <class T> BENCH_HELPER void opt(Checksum& c, std::optional<T> v) {
     if (!v) c.absent();
     else if constexpr (std::is_same_v<T, float>) c.f(*v);
     else if constexpr (std::is_same_v<T, double>) c.d(*v);
@@ -323,33 +335,33 @@ inline std::uint64_t scene(im::Scene s) {
 
 namespace fb_read {
 
-inline void str(Checksum& c, const flatbuffers::String* s) {
+BENCH_HELPER void str(Checksum& c, const flatbuffers::String* s) {
     if (!s) c.absent();
     else c.s(std::string_view(s->c_str(), s->size()));
 }
 
-inline void v2(Checksum& c, const fbm::Vec2* v) { c.f(v ? v->x() : 0); c.f(v ? v->y() : 0); }
-inline void v3(Checksum& c, const fbm::Vec3* v) { c.f(v ? v->x() : 0); c.f(v ? v->y() : 0); c.f(v ? v->z() : 0); }
-inline void v4(Checksum& c, const fbm::Vec4* v) { c.f(v ? v->x() : 0); c.f(v ? v->y() : 0); c.f(v ? v->z() : 0); c.f(v ? v->w() : 0); }
-inline void ref(Checksum& c, const fbm::ObjectRef& r) { c.u(r.component_name()); c.i(r.index()); c.i(r.object_ref_id()); }
+BENCH_HELPER void v2(Checksum& c, const fbm::Vec2* v) { c.f(v ? v->x() : 0); c.f(v ? v->y() : 0); }
+BENCH_HELPER void v3(Checksum& c, const fbm::Vec3* v) { c.f(v ? v->x() : 0); c.f(v ? v->y() : 0); c.f(v ? v->z() : 0); }
+BENCH_HELPER void v4(Checksum& c, const fbm::Vec4* v) { c.f(v ? v->x() : 0); c.f(v ? v->y() : 0); c.f(v ? v->z() : 0); c.f(v ? v->w() : 0); }
+BENCH_HELPER void ref(Checksum& c, const fbm::ObjectRef& r) { c.u(r.component_name()); c.i(r.index()); c.i(r.object_ref_id()); }
 
-inline void ref_or_zero(Checksum& c, const fbm::ObjectRef* r) {
+BENCH_HELPER void ref_or_zero(Checksum& c, const fbm::ObjectRef* r) {
     if (r) ref(c, *r);
     else { c.u(0); c.i(0); c.i(0); }
 }
 
-inline void refs(Checksum& c, const flatbuffers::Vector<const fbm::ObjectRef*>* v) {
+BENCH_HELPER void refs(Checksum& c, const flatbuffers::Vector<const fbm::ObjectRef*>* v) {
     if (!v) { c.absent(); return; }
     c.u(v->size());
     for (const fbm::ObjectRef* r : *v) ref(c, *r);
 }
 
-inline void opt_ref(Checksum& c, const fbm::ObjectRef* r) {
+BENCH_HELPER void opt_ref(Checksum& c, const fbm::ObjectRef* r) {
     if (r) ref(c, *r);
     else c.absent();
 }
 
-inline void opt_bool(Checksum& c, flatbuffers::Optional<bool> b) {
+BENCH_HELPER void opt_bool(Checksum& c, flatbuffers::Optional<bool> b) {
     if (b.has_value()) c.b(b.value());
     else c.absent();
 }
@@ -499,7 +511,7 @@ inline std::uint64_t world(const fbm::World* w) {
     return c.h;
 }
 
-template <class T> inline void opt(Checksum& c, flatbuffers::Optional<T> v) {
+template <class T> BENCH_HELPER void opt(Checksum& c, flatbuffers::Optional<T> v) {
     if (!v.has_value()) c.absent();
     else if constexpr (std::is_same_v<T, float>) c.f(v.value());
     else if constexpr (std::is_same_v<T, double>) c.d(v.value());
@@ -595,38 +607,38 @@ namespace mp_read {
 
 using obj = msgpack::object;
 
-inline const obj& at(const obj& a, std::uint32_t i) { return a.via.array.ptr[i]; }
-inline bool nil(const obj& o) { return o.type == msgpack::type::NIL; }
-inline std::uint64_t integer(const obj& o) { return o.type == msgpack::type::NEGATIVE_INTEGER ? static_cast<std::uint64_t>(o.via.i64) : o.via.u64; }
-inline float f32(const obj& o) { return static_cast<float>(o.via.f64); }
+BENCH_HELPER const obj& at(const obj& a, std::uint32_t i) { return a.via.array.ptr[i]; }
+BENCH_HELPER bool nil(const obj& o) { return o.type == msgpack::type::NIL; }
+BENCH_HELPER std::uint64_t integer(const obj& o) { return o.type == msgpack::type::NEGATIVE_INTEGER ? static_cast<std::uint64_t>(o.via.i64) : o.via.u64; }
+BENCH_HELPER float f32(const obj& o) { return static_cast<float>(o.via.f64); }
 
-inline void str(Checksum& c, const obj& o) {
+BENCH_HELPER void str(Checksum& c, const obj& o) {
     if (nil(o)) c.absent();
     else c.s(std::string_view(o.via.str.ptr, o.via.str.size));
 }
 
-inline void v2(Checksum& c, const obj& v) { c.f(f32(at(v, 0))); c.f(f32(at(v, 1))); }
-inline void v3(Checksum& c, const obj& v) { c.f(f32(at(v, 0))); c.f(f32(at(v, 1))); c.f(f32(at(v, 2))); }
-inline void v4(Checksum& c, const obj& v) { c.f(f32(at(v, 0))); c.f(f32(at(v, 1))); c.f(f32(at(v, 2))); c.f(f32(at(v, 3))); }
-inline void ref(Checksum& c, const obj& r) { c.u(integer(at(r, 0))); c.i(static_cast<std::int64_t>(integer(at(r, 1)))); c.i(static_cast<std::int64_t>(integer(at(r, 2)))); }
+BENCH_HELPER void v2(Checksum& c, const obj& v) { c.f(f32(at(v, 0))); c.f(f32(at(v, 1))); }
+BENCH_HELPER void v3(Checksum& c, const obj& v) { c.f(f32(at(v, 0))); c.f(f32(at(v, 1))); c.f(f32(at(v, 2))); }
+BENCH_HELPER void v4(Checksum& c, const obj& v) { c.f(f32(at(v, 0))); c.f(f32(at(v, 1))); c.f(f32(at(v, 2))); c.f(f32(at(v, 3))); }
+BENCH_HELPER void ref(Checksum& c, const obj& r) { c.u(integer(at(r, 0))); c.i(static_cast<std::int64_t>(integer(at(r, 1)))); c.i(static_cast<std::int64_t>(integer(at(r, 2)))); }
 
-inline void refs(Checksum& c, const obj& v) {
+BENCH_HELPER void refs(Checksum& c, const obj& v) {
     if (nil(v)) { c.absent(); return; }
     c.u(v.via.array.size);
     for (std::uint32_t i = 0; i < v.via.array.size; ++i) ref(c, at(v, i));
 }
 
-inline void opt_ref(Checksum& c, const obj& r) {
+BENCH_HELPER void opt_ref(Checksum& c, const obj& r) {
     if (nil(r)) c.absent();
     else ref(c, r);
 }
 
-inline void opt_bool(Checksum& c, const obj& b) {
+BENCH_HELPER void opt_bool(Checksum& c, const obj& b) {
     if (nil(b)) c.absent();
     else c.b(b.via.boolean);
 }
 
-inline void i(Checksum& c, const obj& o) { c.i(static_cast<std::int64_t>(integer(o))); }
+BENCH_HELPER void i(Checksum& c, const obj& o) { c.i(static_cast<std::int64_t>(integer(o))); }
 
 inline void component(Checksum& c, const obj& u) {
     const std::uint64_t key = integer(at(u, 0));
