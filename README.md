@@ -262,12 +262,16 @@ to their default take no space at all, and bools live in the bitmap itself (two 
    └──────────┴───────────────┴───────┴───────┴─────────┴────────┴───
 
    position of a cell = 4W + F + Σ size × popcount(presence & mask)
-                        one popcount per run of equal-size cells
+                        one popcount per run of equal-size cells, or one load
+                        per byte of presence bits from a table of cell sizes
 ```
 
 The generator knows every type's layout, so the masks and sizes are compile-time constants in the C++ header: reading
-a member is a bit test, one or a few popcounts and a load, with no vtable and no hash. Values of 8 bytes or less and
-plain structs (C layout) are stored inline; strings, vectors, objects and union members sit behind forward offsets.
+a member is a bit test, one or a few popcounts and a load, with no vtable and no hash. Where the cells before a member
+have different sizes, a byte of presence bits indexes a 256-entry table of their sizes instead (types with the same
+cell sizes share it): one load replaces several popcounts, and a load waits for its data outside the CPU's scheduler,
+so more independent reads overlap. Values of 8 bytes or less and plain structs (C layout) are stored inline; strings,
+vectors, objects and union members sit behind forward offsets.
 
 ### Fixed cells for members that are always set
 

@@ -39,10 +39,10 @@ no fixed cells.
 + 2 * boolCount) / 32))`. Unused bits are zero, and a bool's value bit may be set only when its present bit is set.
 
 **Cells.** Only present cells are stored, back to back in wire order, starting at byte `4W + F`. A present cell's
-position is `4W + F` plus the sizes of the present cells before it. A reader computes it as one popcount per run of
-equal-size cells in a header word. Because cells are sorted by alignment, every cell is naturally aligned once the
-cell area is. The writer aligns the cell area (at `4W`) to the largest alignment of any cell, fixed or not, and to
-at least 4.
+position is `4W + F` plus the sizes of the present cells before it. A reader can compute it as one popcount per run
+of equal-size cells in a header word, or with one lookup per byte of presence bits in a table of the cells' sizes.
+Because cells are sorted by alignment, every cell is naturally aligned once the cell area is. The writer aligns the
+cell area (at `4W`) to the largest alignment of any cell, fixed or not, and to at least 4.
 
 | Kind | Id | Cell size / alignment | Cell contents |
 |---|---:|---|---|

@@ -364,14 +364,70 @@ template <class S, std::uint32_t Bit, std::size_t K> TESSERA_ALWAYS_INLINE std::
     else return n * size;
 }
 
-/// Byte offset (from the table start) of the cell of presence bit `Bit`: header and fixed cells, plus the sizes of all
-/// present cells before it, computed with one popcount per run of equal-size cells.
+/// Header and fixed cells, plus the sizes of the present cells before presence bit `Bit` with one popcount per run of
+/// equal-size cells.
 template <class S, std::uint32_t Bit, std::size_t... K>
 TESSERA_ALWAYS_INLINE std::uint32_t cell_offset_terms([[maybe_unused]] const std::uint8_t* p, std::index_sequence<K...>) noexcept {
     return 4u * S::words + S::fixed + (0u + ... + cell_term<S, Bit, K>(p));
 }
+
+/// The sizes of the present cells among one byte of presence bits, for each of its 256 values. Types with the same
+/// eight cell sizes share a table.
+template <std::uint16_t... Size> struct ByteTable {
+    static constexpr std::uint32_t total = (0u + ... + Size);
+    using entry = std::conditional_t<(total <= 0xFFu), std::uint8_t, std::uint16_t>;
+    alignas(64) static constexpr std::array<entry, 256> t = [] {
+        constexpr std::uint16_t size[] = {Size...};
+        std::array<entry, 256> r{};
+        for (std::uint32_t m = 0; m < 256; ++m) {
+            std::uint32_t sum = 0;
+            for (std::uint32_t j = 0; j < 8; ++j)
+                if (m & (1u << j)) sum += size[j];
+            r[m] = static_cast<entry>(sum);
+        }
+        return r;
+    }();
+};
+
+/// Cell size of presence bit j (0 past the cells: bools have none).
+template <class S> consteval std::uint16_t size_at(std::uint32_t j) { return j + 1 < std::size(S::cells) ? S::cells[j] : 0; }
+
+template <class S, std::uint32_t K, std::size_t... J> auto byte_table_of(std::index_sequence<J...>) -> ByteTable<size_at<S>(8 * K + J)...>;
+/// The table of byte K of S's presence bits (bits 8K to 8K + 7, which is byte K of its header words).
+template <class S, std::uint32_t K> using byte_table_t = decltype(byte_table_of<S, K>(std::make_index_sequence<8>{}));
+
+/// Whether the cell of presence bit `bit` is found with tables, one load per byte of presence bits before it, instead
+/// of one popcount per run of equal-size cells: when that takes fewer steps (a table load waits for its data in the
+/// load buffer, where a popcount chain holds scheduler entries, so more reads overlap), and with MSVC also when both
+/// take one (MSVC's popcount is the slower of the two there, GCC's and Clang's are not; measured).
+template <class S> consteval bool use_tables(std::uint32_t bit) {
+    const std::size_t runs = term_count<S>(bit), bytes = (bit + 7) / 8;
+    if (runs == 0 || bit <= 1) return false;
+#if defined(_MSC_VER) && !defined(__clang__)
+    if (bytes == 1) return true;
+#endif
+    return bytes < runs;
+}
+
+template <class S, std::uint32_t Bit, std::uint32_t K> TESSERA_ALWAYS_INLINE std::uint32_t table_term(const std::uint8_t* p) noexcept {
+    using T = byte_table_t<S, K>;
+    constexpr std::uint32_t used = Bit - 8 * K < 8 ? Bit - 8 * K : 8;  // bits of this byte before Bit
+    if constexpr (T::total == 0) return 0;
+    else if constexpr (used == 8) return T::t[p[K]];
+    else return T::t[p[K] & ((1u << used) - 1u)];
+}
+
+/// Header and fixed cells, plus the sizes of the present cells before presence bit `Bit` with one table load per byte.
+template <class S, std::uint32_t Bit, std::size_t... K>
+TESSERA_ALWAYS_INLINE std::uint32_t cell_offset_tables(const std::uint8_t* p, std::index_sequence<K...>) noexcept {
+    return 4u * S::words + S::fixed + (0u + ... + table_term<S, Bit, static_cast<std::uint32_t>(K)>(p));
+}
+
+/// Byte offset (from the table start) of the cell of presence bit `Bit`: header and fixed cells, plus the sizes of all
+/// present cells before it.
 template <class S, std::uint32_t Bit> TESSERA_ALWAYS_INLINE std::uint32_t cell_offset(const std::uint8_t* p) noexcept {
-    return cell_offset_terms<S, Bit>(p, std::make_index_sequence<term_count<S>(Bit)>{});
+    if constexpr (use_tables<S>(Bit)) return cell_offset_tables<S, Bit>(p, std::make_index_sequence<(Bit + 7) / 8>{});
+    else return cell_offset_terms<S, Bit>(p, std::make_index_sequence<term_count<S>(Bit)>{});
 }
 
 inline const std::uint8_t* slow_cell(const std::uint8_t* p, const Binding* b, std::size_t i) noexcept {
