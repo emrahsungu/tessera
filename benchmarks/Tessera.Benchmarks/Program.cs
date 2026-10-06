@@ -16,7 +16,7 @@ using MessagePack;
 
 // Usage: Tessera.Benchmarks [--export-only] [--quick] [--rounds N] [--round-ms N] [--warmup-ms N] [--filter text]
 //        Tessera.Benchmarks --report <results dir> <out.md>
-// 1. builds the four workloads, 2. writes every library's buffer and the expected checksums for the C++ benchmark,
+// 1. builds the workloads, 2. writes every library's buffer and the expected checksums for the C++ benchmark,
 // 3. times serialization (unless --export-only) and writes benchmarks/results/dotnet.json.
 // --filter keeps only cases whose "workload/library/variant" contains the text (for focused tuning).
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
@@ -55,6 +55,8 @@ AddFixed("series", FixedSeries.From(series));
 // Scene graphs of 1,024 nodes: dense, sparse, and 16 distinct nodes repeated.
 foreach (string scene in new[] { "dense-unique", "sparse-unique", "dense-shared" }) Add(scene, DataGen.Scene(scene), static (fb, x) => fb.Write(x), Checksum.Of);
 Add("lookup", DataGen.Lookup(), static (fb, x) => fb.Write(x), Checksum.Of);
+// Real data: canada.json, one GeoJSON polygon of 480 rings and 55,563 points (scripts/deps.ps1 fetches it).
+Add("canada", DataGen.Canada(Path.Combine(root, ".deps", "downloads", "canada.json")), static (fb, x) => fb.Write(x), Checksum.Of);
 
 File.WriteAllText(Path.Combine(dataDir, "expected.txt"), string.Join("\n", expected.Select(kv => $"{kv.Key} {kv.Value}")) + "\n");
 Console.WriteLine($"Exported buffers to {dataDir}");

@@ -1,4 +1,4 @@
-// FlatBuffers schemas for the four benchmark workloads. They mirror benchmarks/Tessera.Benchmarks/Models.cs.
+// FlatBuffers schemas for the benchmark workloads. They mirror benchmarks/Tessera.Benchmarks/Models.cs.
 namespace Bench.Fb;
 
 struct Vec2 { x:float; y:float; }
@@ -192,4 +192,34 @@ table LookupPrice {
 table Lookup {
   items:[LookupItem];
   prices:[LookupPrice];
+}
+
+// ---------------------------------------------------------------- GeoJSON (canada.json)
+
+struct Point { x:double; y:double; }
+
+// FlatBuffers has no vectors of vectors, so each ring of the polygon is a table.
+table Ring {
+  points:[Point];
+}
+
+table Geometry {
+  type:string;
+  coordinates:[Ring];
+}
+
+table Property {
+  key:string (key);
+  value:string;
+}
+
+table Feature {
+  type:string;
+  properties:[Property];
+  geometry:Geometry;
+}
+
+table FeatureCollection {
+  type:string;
+  features:[Feature];
 }

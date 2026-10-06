@@ -1,4 +1,4 @@
-# Fetches the pinned third-party code used only by the benchmarks and interop tests.
+# Fetches the pinned third-party code and data used only by the benchmarks and interop tests.
 # The Tessera library itself has no dependencies. Everything lands in the git-ignored .deps folder.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -19,7 +19,11 @@ $pins = @(
        Sha256 = '68D51916873A3DBDAF7997DDFBBBFD6472B5907FFC62CCC9A88D146BBC0DB87D' },
     @{ Name = 'msgpack-cxx-9.0.0.tar.gz'
        Url = 'https://github.com/msgpack/msgpack-c/releases/download/cpp-9.0.0/msgpack-cxx-9.0.0.tar.gz'
-       Sha256 = '303D3A7321AEE65EB9450DB8A6C973954E00AF34B88BA0C0ACA236BC50BFB8A9' }
+       Sha256 = '303D3A7321AEE65EB9450DB8A6C973954E00AF34B88BA0C0ACA236BC50BFB8A9' },
+    # The canada workload's data: the contour of Canada as GeoJSON, a common JSON benchmark (nativejson-benchmark, MIT).
+    @{ Name = 'canada.json'
+       Url = 'https://raw.githubusercontent.com/miloyip/nativejson-benchmark/478d5727c2a4048e835a29c65adecc7d795360d5/data/canada.json'
+       Sha256 = 'F83B3B354030D5DD58740C68AC4FECEF64CB730A0D12A90362A7F23077F50D78' }
 )
 
 foreach ($pin in $pins) {
@@ -64,4 +68,4 @@ if (-not (Test-Path (Join-Path $mp 'include/msgpack.hpp'))) {
     Remove-Item -Recurse -Force $tmp
 }
 
-Write-Host "Dependencies ready in $deps (FlatBuffers $flatbuffersTag, msgpack-cxx 9.0.0)."
+Write-Host "Dependencies ready in $deps (FlatBuffers $flatbuffersTag, msgpack-cxx 9.0.0, canada.json)."

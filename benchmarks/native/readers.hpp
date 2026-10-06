@@ -329,6 +329,43 @@ inline std::uint64_t scene(im::Scene s) {
     return c.h;
 }
 
+inline std::uint64_t canada(im::FeatureCollection x) {
+    Checksum c;
+    str(c, x.type());
+    auto features = x.features();
+    if (!features) { c.absent(); return c.h; }
+    c.u(features.size());
+    for (im::Feature f : features) {
+        str(c, f.type());
+        auto props = f.properties();
+        if (!props) c.absent();
+        else {
+            auto keys = props.keys();
+            auto values = props.values();
+            c.u(keys.size());
+            for (std::uint32_t i = 0; i < keys.size(); ++i) {
+                str(c, keys[i]);
+                str(c, values[i]);
+            }
+        }
+        auto g = f.geometry();
+        if (!g) { c.absent(); continue; }
+        str(c, g.type());
+        auto rings = g.coordinates();
+        if (!rings) { c.absent(); continue; }
+        c.u(rings.size());
+        for (tessera::Vector<im::Point> ring : rings) {
+            if (!ring) { c.absent(); continue; }
+            c.u(ring.size());
+            for (const im::Point& p : ring) {
+                c.d(p.x);
+                c.d(p.y);
+            }
+        }
+    }
+    return c.h;
+}
+
 }  // namespace tessera_read
 
 // ============================================================================ FlatBuffers
@@ -599,6 +636,42 @@ inline std::uint64_t scene(const fbm::Scene* s) {
     return c.h;
 }
 
+inline std::uint64_t canada(const fbm::FeatureCollection* x) {
+    Checksum c;
+    str(c, x->type());
+    auto features = x->features();
+    if (!features) { c.absent(); return c.h; }
+    c.u(features->size());
+    for (const fbm::Feature* f : *features) {
+        str(c, f->type());
+        auto props = f->properties();
+        if (!props) c.absent();
+        else {
+            c.u(props->size());
+            for (const fbm::Property* p : *props) {
+                str(c, p->key());
+                str(c, p->value());
+            }
+        }
+        auto g = f->geometry();
+        if (!g) { c.absent(); continue; }
+        str(c, g->type());
+        auto rings = g->coordinates();
+        if (!rings) { c.absent(); continue; }
+        c.u(rings->size());
+        for (const fbm::Ring* ring : *rings) {
+            auto points = ring->points();
+            if (!points) { c.absent(); continue; }
+            c.u(points->size());
+            for (const fbm::Point* p : *points) {
+                c.d(p->x());
+                c.d(p->y());
+            }
+        }
+    }
+    return c.h;
+}
+
 }  // namespace fb_read
 
 // ============================================================================ MessagePack (msgpack-cxx object tree)
@@ -823,6 +896,44 @@ inline std::uint64_t scene(const obj& s) {
         }
     }
     str(c, at(s, 1));
+    return c.h;
+}
+
+inline std::uint64_t canada(const obj& x) {
+    Checksum c;
+    str(c, at(x, 0));
+    const obj& features = at(x, 1);
+    if (nil(features)) { c.absent(); return c.h; }
+    c.u(features.via.array.size);
+    for (std::uint32_t k = 0; k < features.via.array.size; ++k) {
+        const obj& f = at(features, k);
+        str(c, at(f, 0));
+        const obj& props = at(f, 1);
+        if (nil(props)) c.absent();
+        else {
+            c.u(props.via.map.size);
+            for (std::uint32_t j = 0; j < props.via.map.size; ++j) {
+                str(c, props.via.map.ptr[j].key);
+                str(c, props.via.map.ptr[j].val);
+            }
+        }
+        const obj& g = at(f, 2);
+        if (nil(g)) { c.absent(); continue; }
+        str(c, at(g, 0));
+        const obj& rings = at(g, 1);
+        if (nil(rings)) { c.absent(); continue; }
+        c.u(rings.via.array.size);
+        for (std::uint32_t r = 0; r < rings.via.array.size; ++r) {
+            const obj& ring = at(rings, r);
+            if (nil(ring)) { c.absent(); continue; }
+            c.u(ring.via.array.size);
+            for (std::uint32_t j = 0; j < ring.via.array.size; ++j) {
+                const obj& p = at(ring, j);
+                c.d(at(p, 0).via.f64);
+                c.d(at(p, 1).via.f64);
+            }
+        }
+    }
     return c.h;
 }
 

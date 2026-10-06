@@ -280,4 +280,40 @@ public sealed class Checksum
         Opt(n.Parent, x => I(x));
         List(n.Children, x => I(x));
     }
+
+    public static ulong Of(FeatureCollection x)
+    {
+        var c = new Checksum();
+        c.S(x.Type);
+        c.List(x.Features, c.Feature);
+        return c.Value;
+    }
+
+    private void Feature(Feature f)
+    {
+        S(f.Type);
+        if (f.Properties == null) Mix(Absent);
+        else
+        {
+            Mix((ulong)f.Properties.Count);
+            foreach (var kv in f.Properties)
+            {
+                S(kv.Key);
+                S(kv.Value);
+            }
+        }
+
+        if (f.Geometry == null)
+        {
+            Mix(Absent);
+            return;
+        }
+
+        S(f.Geometry.Type);
+        List(f.Geometry.Coordinates, ring => List(ring, p =>
+        {
+            D(p.X);
+            D(p.Y);
+        }));
+    }
 }

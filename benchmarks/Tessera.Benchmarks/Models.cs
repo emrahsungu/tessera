@@ -344,3 +344,41 @@ public sealed class Lookup
     [Key(0)] public Dictionary<string, Stock>? Items;
     [Key(1)] public Dictionary<int, double>? Prices;
 }
+
+// ---------------------------------------------------------------- GeoJSON (canada.json)
+
+/// <summary>A GeoJSON position, [longitude, latitude].</summary>
+[MessagePackObject]
+public struct Point
+{
+    [Key(0)] public double X;
+    [Key(1)] public double Y;
+
+    public Point(double x, double y)
+    {
+        X = x;
+        Y = y;
+    }
+}
+
+[Tessera, MessagePackObject]
+public sealed class Geometry
+{
+    [Key(0)] public string? Type;
+    [Key(1)] public List<List<Point>>? Coordinates;  // a polygon: rings of points
+}
+
+[Tessera, MessagePackObject]
+public sealed class Feature
+{
+    [Key(0)] public string? Type;
+    [Key(1)] public Dictionary<string, string>? Properties;
+    [Key(2)] public Geometry? Geometry;
+}
+
+[Tessera, MessagePackObject]
+public sealed class FeatureCollection
+{
+    [Key(0)] public string? Type;
+    [Key(1)] public List<Feature>? Features;
+}

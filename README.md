@@ -170,9 +170,10 @@ Environment: Intel Core i7-6700K, Windows 10, .NET 10.0.12. C++ with clang-cl 19
 each compiler with the same flags for every library (optimized, AVX2). Against FlatBuffers 25.12.19,
 MessagePack-CSharp 3.1.10 and msgpack-cxx 9.0.0. Medians of interleaved rounds.
 
-There are eight workloads: a UI prefab (400 objects with polymorphic components), a game world (1,000 monsters),
+There are nine workloads: a UI prefab (400 objects with polymorphic components), a game world (1,000 monsters),
 2,000 sparse records (40 optional fields each), a 20,000-sample time series, three scene graphs of 1,024 nodes (dense,
-sparse, and 16 distinct nodes repeated) and two dictionaries of 5,000 entries. Every library writes the same C#
+sparse, and 16 distinct nodes repeated), two dictionaries of 5,000 entries, and canada.json, the contour of Canada from
+the common JSON benchmarks: one GeoJSON polygon of 480 rings and 55,563 points. Every library writes the same C#
 objects, and every C++ reader computes a checksum over every field, which must match the C# objects before anything
 is timed.
 
@@ -249,7 +250,7 @@ FlatBuffers' and MessagePack's code does not change ([benchmarks/native/readers.
 
 The full list, computed from the results, is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
-Reproduce everything (it also fetches FlatBuffers and msgpack-cxx, SHA-256 pinned, into `.deps/`):
+Reproduce everything (it also fetches FlatBuffers, msgpack-cxx and canada.json, SHA-256 pinned, into `.deps/`):
 
 ```shell
 powershell scripts/bench.ps1
@@ -612,6 +613,7 @@ is distributed under its own license.
 | [FlatBuffers](https://github.com/google/flatbuffers) 25.12.19 | benchmarks: `flatc`, C++ headers, the C# runtime (built from source) | Apache-2.0 |
 | [msgpack-c](https://github.com/msgpack/msgpack-c) (C++) 9.0.0 | benchmarks: the C++ MessagePack reader | BSL-1.0 |
 | [MessagePack-CSharp](https://github.com/MessagePack-CSharp/MessagePack-CSharp) 3.1.10 | benchmarks: the .NET MessagePack writer | MIT |
+| [nativejson-benchmark](https://github.com/miloyip/nativejson-benchmark) | benchmarks: `canada.json`, the canada workload's data (fetched, not included) | MIT |
 | [xUnit.net](https://github.com/xunit/xunit) v3 | tests | Apache-2.0 |
 | [Roslyn](https://github.com/dotnet/roslyn) (Microsoft.CodeAnalysis.CSharp 4.8) | building the source generator (not shipped) | MIT |
 | [xxHash](https://github.com/Cyan4973/xxHash) | the hash algorithm of member names, union tags and fingerprints, implemented in `src/Shared/XxHash.cs` | BSD-2-Clause |

@@ -1,11 +1,16 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text.Json;
 using Bench.Models;
 
 namespace Bench;
 
-/// <summary>Deterministic benchmark data. Distributions imitate real data: repeated names, mostly-default transforms.</summary>
+/// <summary>
+/// Deterministic benchmark data. Distributions imitate real data: repeated names, mostly-default transforms. The canada
+/// workload is real data, read from canada.json.
+/// </summary>
 public static class DataGen
 {
     public static Prefab Prefab(int objects = 400, int seed = 1)
@@ -270,6 +275,39 @@ public static class DataGen
                     Children = sparse && i % 8 != 0 ? null : new[] { n + 1, n + 2, n + 3 },
                 };
             }).ToArray(),
+        };
+    }
+
+    /// <summary>
+    /// canada.json, which scripts/deps.ps1 fetches: the contour of Canada as a GeoJSON feature collection with one
+    /// polygon of 480 rings and 55,563 points. Properties are added in key order, the order in which Tessera and
+    /// FlatBuffers store them, so the reference checksum sees them in the same order.
+    /// </summary>
+    public static FeatureCollection Canada(string path)
+    {
+        if (!File.Exists(path)) throw new FileNotFoundException("canada.json is missing: scripts/deps.ps1 fetches it into .deps/downloads.", path);
+        using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+        JsonElement root = doc.RootElement;
+        return new FeatureCollection
+        {
+            Type = root.GetProperty("type").GetString(),
+            Features = root.GetProperty("features").EnumerateArray().Select(f =>
+            {
+                JsonElement geometry = f.GetProperty("geometry");
+                return new Feature
+                {
+                    Type = f.GetProperty("type").GetString(),
+                    Properties = f.GetProperty("properties").EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal)
+                        .ToDictionary(p => p.Name, p => p.Value.GetString()!),
+                    Geometry = new Geometry
+                    {
+                        Type = geometry.GetProperty("type").GetString(),
+                        Coordinates = geometry.GetProperty("coordinates").EnumerateArray()
+                            .Select(ring => ring.EnumerateArray().Select(p => new Point(p[0].GetDouble(), p[1].GetDouble())).ToList())
+                            .ToList(),
+                    },
+                };
+            }).ToList(),
         };
     }
 

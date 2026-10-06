@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Bench.Models;
 using Google.FlatBuffers;
 using Fb = Bench.Fb;
@@ -442,5 +443,80 @@ public sealed class FbWriters
         if (x.Parent is int parent) Fb.Node.AddParent(_b, parent);
         if (x.Children != null) Fb.Node.AddChildren(_b, children);
         return Fb.Node.EndNode(_b);
+    }
+
+    // ------------------------------------------------------------------ GeoJSON (canada)
+
+    public void Write(FeatureCollection x)
+    {
+        _b.Clear();
+        _top = 0;
+        VectorOffset features = default;
+        if (x.Features != null)
+        {
+            int n = x.Features.Count, s = Push(n);
+            for (int i = 0; i < n; i++) { int v = Feature(x.Features[i]).Value; _stack[s + i] = v; }
+            features = OffsetVector(s, n);
+        }
+
+        var type = Str(x.Type);
+        Fb.FeatureCollection.StartFeatureCollection(_b);
+        if (x.Type != null) Fb.FeatureCollection.AddType(_b, type);
+        if (x.Features != null) Fb.FeatureCollection.AddFeatures(_b, features);
+        _b.Finish(Fb.FeatureCollection.EndFeatureCollection(_b).Value);
+    }
+
+    private Offset<Fb.Feature> Feature(Feature f)
+    {
+        var type = Str(f.Type);
+        VectorOffset properties = default;
+        if (f.Properties != null)
+        {
+            var offsets = new Offset<Fb.Property>[f.Properties.Count];
+            int i = 0;
+            foreach (var kv in f.Properties) offsets[i++] = Fb.Property.CreateProperty(_b, Str(kv.Key), Str(kv.Value));
+            properties = Fb.Property.CreateSortedVectorOfProperty(_b, offsets);
+        }
+
+        Offset<Fb.Geometry> geometry = f.Geometry != null ? Geometry(f.Geometry) : default;
+        Fb.Feature.StartFeature(_b);
+        if (f.Type != null) Fb.Feature.AddType(_b, type);
+        if (f.Properties != null) Fb.Feature.AddProperties(_b, properties);
+        if (f.Geometry != null) Fb.Feature.AddGeometry(_b, geometry);
+        return Fb.Feature.EndFeature(_b);
+    }
+
+    private Offset<Fb.Geometry> Geometry(Geometry g)
+    {
+        var type = Str(g.Type);
+        VectorOffset rings = default;
+        if (g.Coordinates != null)
+        {
+            int n = g.Coordinates.Count, s = Push(n);
+            for (int i = 0; i < n; i++) { int v = Ring(g.Coordinates[i]).Value; _stack[s + i] = v; }
+            rings = OffsetVector(s, n);
+        }
+
+        Fb.Geometry.StartGeometry(_b);
+        if (g.Type != null) Fb.Geometry.AddType(_b, type);
+        if (g.Coordinates != null) Fb.Geometry.AddCoordinates(_b, rings);
+        return Fb.Geometry.EndGeometry(_b);
+    }
+
+    // A ring's points are copied as one block, the way the generated Create...VectorBlock methods copy scalars: a
+    // vector of structs holds them in their little-endian C layout, which is Point's (two doubles).
+    private unsafe Offset<Fb.Ring> Ring(List<Point>? ring)
+    {
+        VectorOffset points = default;
+        if (ring != null)
+        {
+            Fb.Ring.StartPointsVector(_b, ring.Count);
+            fixed (Point* p = CollectionsMarshal.AsSpan(ring)) _b.Add<double>((IntPtr)p, ring.Count * sizeof(Point));
+            points = _b.EndVector();
+        }
+
+        Fb.Ring.StartRing(_b);
+        if (ring != null) Fb.Ring.AddPoints(_b, points);
+        return Fb.Ring.EndRing(_b);
     }
 }

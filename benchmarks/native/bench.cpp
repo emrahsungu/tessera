@@ -133,7 +133,7 @@ int main(int argc, char** argv) {
     }
 
     std::map<std::string, Buffer> buffers;
-    for (const char* w : {"prefab", "monsters", "records", "series", "dense-unique", "sparse-unique", "dense-shared", "lookup"})
+    for (const char* w : {"prefab", "monsters", "records", "series", "dense-unique", "sparse-unique", "dense-shared", "lookup", "canada"})
         for (const char* lib : {"tessera", "tessera-all", "tessera-noshare", "fb", "msgpack"})
             buffers[std::string(w) + "." + lib] = load(dir + "/" + w + "." + lib + ".bin");
     buffers["series.tessera-fixed"] = load(dir + "/series.tessera-fixed.bin");
@@ -484,6 +484,28 @@ int main(int argc, char** argv) {
         cases.push_back({w, "FlatBuffers", "1000 lookups by int", fb_ids, {}});
         cases.push_back({w, "MessagePack", "1000 lookups by int (parsed tree, linear)", mp_ids, {}});
     }
+
+    // Real data: canada.json, one GeoJSON polygon of 480 rings and 55,563 points. A random read takes a ring's middle
+    // point (FlatBuffers has no vectors of vectors, so there each ring is a table holding a vector of points).
+    add_workload(
+        "canada", im::FeatureCollection{}, tessera_read::canada, [](const std::uint8_t* p) { return flatbuffers::GetRoot<fbm::FeatureCollection>(p); },
+        [](flatbuffers::Verifier& v) { return v.VerifyBuffer<fbm::FeatureCollection>(nullptr); }, fb_read::canada, mp_read::canada,
+        [](im::FeatureCollection x, std::uint32_t i) -> std::uint64_t {
+            auto ring = x.features()[0].geometry().coordinates()[i];
+            const im::Point& p = ring[ring.size() / 2];
+            return ring.size() + std::bit_cast<std::uint64_t>(p.x) + std::bit_cast<std::uint64_t>(p.y);
+        },
+        [](const fbm::FeatureCollection* x, std::uint32_t i) -> std::uint64_t {
+            auto points = x->features()->Get(0)->geometry()->coordinates()->Get(i)->points();
+            const fbm::Point* p = points->Get(points->size() / 2);
+            return points->size() + std::bit_cast<std::uint64_t>(p->x()) + std::bit_cast<std::uint64_t>(p->y());
+        },
+        [](const msgpack::object& x, std::uint32_t i) -> std::uint64_t {
+            const auto& ring = at(at(at(at(at(x, 1), 0), 2), 1), i);
+            const auto& p = at(ring, ring.via.array.size / 2);
+            return ring.via.array.size + std::bit_cast<std::uint64_t>(at(p, 0).via.f64) + std::bit_cast<std::uint64_t>(at(p, 1).via.f64);
+        },
+        [](im::FeatureCollection x) { return x.features()[0].geometry().coordinates().size(); });
 
     // Fixed cells: the series again, with its always-set values marked [TesseraKeepDefault] (constant positions, no
     // presence bits), read like the Tessera rows above with the same picks.
