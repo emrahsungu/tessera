@@ -4,6 +4,7 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics.X86;
 using System.Text;
 
 namespace Tessera;
@@ -200,7 +201,9 @@ public sealed partial class TesseraWriter
         return position;
     }
 
-    private bool WriteKeys(string[] keys, int count, bool checkOrder, out int position)
+    private const int KeyPrefetch = 8;
+
+    private unsafe bool WriteKeys(string[] keys, int count, bool checkOrder, out int position)
     {
         Enter();
         int slot = PushRefs(count);
@@ -208,6 +211,10 @@ public sealed partial class TesseraWriter
         if (_shareStrings && _pendingStrings.Length < count) _pendingStrings = new (string, int)[Math.Max(count, 2 * _pendingStrings.Length)];
         for (int i = count - 1; i >= 0; i--)
         {
+            // Keys are scattered strings: fetch one a few keys ahead, so that the order check below does not wait for
+            // memory on a branch.
+            if (i >= KeyPrefetch && Sse.IsSupported && keys[i - KeyPrefetch] is { } ahead)
+                Sse.Prefetch0(Unsafe.AsPointer(ref Unsafe.AsRef(in ahead.GetPinnableReference())));
             string key = keys[i];
             if (checkOrder && i + 1 < count && TesseraMapKeys.CompareCodePoints(key, keys[i + 1]) >= 0)
             {
