@@ -152,9 +152,9 @@ C++ engine. Both sides are generated from the same C# source, so they cannot dri
 - **Zero-copy reads.** After one verification pass, every access is a plain load: no parsing, no allocations.
 - **Readable C++.** One header per type, `std::optional` for nullable members, `std::string_view` for strings,
   `enum class` with your names, and `const S&` straight into the buffer for plain structs.
-- **Fast.** Writes are 7.6× faster than FlatBuffers and 2.1× faster than MessagePack-CSharp, with no allocations
-  besides the resulting array (with a reused writer, none at all). Verifying a buffer is 2.7–4.4× faster than
-  FlatBuffers' verifier; verifying and then reading every field is 1.7–2.1× faster. Geometric means over the
+- **Fast.** Writes are 6.3× faster than FlatBuffers and 2.4× faster than MessagePack-CSharp, with no allocations
+  besides the resulting array (with a reused writer, none at all). Verifying a buffer is 2.7–4.1× faster than
+  FlatBuffers' verifier; verifying and then reading every field is 1.6–1.9× faster. Geometric means over the
   benchmark workloads (per compiler for C++); see [Performance](#4-performance).
 - **Compact.** Absent members and default values take no space, and equal strings are stored once: buffers are up to
   70% smaller than FlatBuffers' (1.3× on the geometric mean).
@@ -168,7 +168,9 @@ C++ engine. Both sides are generated from the same C# source, so they cannot dri
 
 Environment: Intel Core i7-6700K, Windows 10, .NET 10.0.12. C++ with clang-cl 19.1, MSVC 19.42 and GCC 15.2 (in WSL),
 each compiler with the same flags for every library (optimized, AVX2). Against FlatBuffers 25.12.19,
-MessagePack-CSharp 3.1.10 and msgpack-cxx 9.0.0. Medians of interleaved rounds.
+MessagePack-CSharp 3.1.10 and msgpack-cxx 9.0.0. Medians of interleaved rounds; in .NET, every case starts on a
+collected heap, and result arrays are allocated as short-lived objects ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)
+explains why).
 
 There are nine workloads: a UI prefab (400 objects with polymorphic components), a game world (1,000 monsters),
 2,000 sparse records (40 optional fields each), a 20,000-sample time series, three scene graphs of 1,024 nodes (dense,
@@ -182,14 +184,15 @@ every field.
 
 | Workload | .NET write | Size | Safe read, Clang | Safe read, GCC | Safe read, MSVC |
 |---|---:|---:|---:|---:|---:|
-| prefab | 4.33× | 1.28× | 1.54× | 2.19× | 1.72× |
-| monsters | 4.37× | 1.18× | 1.49× | 1.68× | 1.45× |
-| records | 30.48× | 3.37× | 2.51× | 2.76× | 3.37× |
-| series | 4.70× | 1.00× | 1.89× | 1.96× | 1.69× |
-| dense-unique | 4.47× | 1.06× | 1.45× | 2.10× | 1.32× |
-| sparse-unique | 6.29× | 1.04× | 1.75× | 2.19× | 1.73× |
-| dense-shared | 5.56× | 1.32× | 1.45× | 2.10× | 1.32× |
-| lookup | 25.77× | 1.16× | 2.34× | 2.29× | 1.59× |
+| prefab | 4.11× | 1.28× | 1.53× | 2.18× | 1.72× |
+| monsters | 4.68× | 1.18× | 1.50× | 1.69× | 1.43× |
+| records | 30.51× | 3.37× | 2.53× | 2.73× | 3.32× |
+| series | 5.34× | 1.00× | 1.89× | 1.97× | 1.80× |
+| dense-unique | 4.08× | 1.06× | 1.56× | 1.99× | 1.33× |
+| sparse-unique | 5.86× | 1.04× | 1.78× | 2.11× | 1.71× |
+| dense-shared | 5.26× | 1.32× | 1.46× | 2.03× | 1.33× |
+| lookup | 31.21× | 1.16× | 2.31× | 2.19× | 1.59× |
+| canada | 1.25× | 1.00× | 1.05× | 1.03× | 1.02× |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmarks/summary-dark.svg">
@@ -212,8 +215,9 @@ These numbers describe these workloads on this machine; they are not guarantees.
   <img alt="Buffer size per workload for Tessera, FlatBuffers and MessagePack" src="docs/images/benchmarks/size-light.svg">
 </picture>
 
-MessagePack stores small integers in one or two bytes, so it is smaller on six of the eight workloads; Tessera is
-smaller on the prefab and the sparse records. Tessera keeps values fixed-width so that they can be read in place.
+MessagePack stores small integers in one or two bytes, so it is smaller on six of the nine workloads; Tessera is
+smaller on the prefab, the sparse records and canada, whose doubles take nine bytes each in MessagePack. Tessera keeps
+values fixed-width so that they can be read in place.
 
 ### C++: verify, then read every field
 
@@ -238,11 +242,12 @@ smaller on the prefab and the sparse records. Tessera keeps values fixed-width s
 
 ### Where Tessera is slower
 
-- **Size, against MessagePack**, on six of the eight workloads (1.11–1.70×): MessagePack stores small integers in one
+- **Size, against MessagePack**, on six of the nine workloads (1.11–1.70×): MessagePack stores small integers in one
   or two bytes; Tessera keeps values fixed-width so that they can be read in place.
-- **Time: nowhere by more than 1%.** Three GCC rows are within 1% of FlatBuffers: reading every field of the dense and
-  sparse scenes (there, all three libraries run at the speed of the benchmark's checksum) and random reads of the
-  records. MessagePack's C++ traversals and random reads run over a tree parsed beforehand, so they are not compared.
+- **Time: nowhere by more than 1%.** Two GCC rows are within 1% of FlatBuffers: reading every field of the sparse
+  scene and of canada. There, all three libraries run at the speed of the benchmark's checksum, which mixes every
+  value into one running hash. MessagePack's C++ traversals and random reads run over a tree parsed beforehand, so
+  they are not compared.
 
 With MSVC, the C++ readers' small helper functions are force-inlined, for all three libraries: MSVC stopped inlining
 them into one large function when it read Tessera, which made reading every field of the prefab 24% slower.
