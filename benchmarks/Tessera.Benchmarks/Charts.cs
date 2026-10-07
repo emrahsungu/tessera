@@ -88,10 +88,15 @@ public static class Charts
 
         // 6. Dictionary lookups.
         var lookups = new List<(string Group, string Label, double[] Values)>();
-        foreach (var (title, prefix) in new[] { ("By string", "1000 lookups by string"), ("By int", "1000 lookups by int") })
+        var scans = new List<string>();
+        foreach (var (title, prefix, kind) in new[] { ("By string", "1000 lookups by string", "string"), ("By int", "1000 lookups by int", "int") })
         {
             foreach (var (compiler, reads) in natives) lookups.Add((title, compiler, new[] { Op(reads, "lookup", "Tessera", prefix), Op(reads, "lookup", "FlatBuffers", prefix) }));
+            var ms = natives.Select(n => Op(n.Reads, "lookup", "MessagePack", prefix) / 1000).Where(x => x > 0).ToList();
+            if (ms.Count > 0) scans.Add($"{ms.Min().ToString("0.0", Inv)}–{ms.Max().ToString("0.0", Inv)} ms by {kind}");
         }
+
+        string scan = scans.Count > 0 ? $" MessagePack scans its parsed tree ({string.Join(", ", scans)}) and is left out." : "";
 
         string[] compilers = natives.Select(n => n.Compiler).ToArray();
         foreach (var t in Themes)
@@ -106,7 +111,7 @@ public static class Charts
                 compilers.Select((c, i) => (c, t.Compilers[i % t.Compilers.Length])).ToArray(), PerWorkload("verify + traversal").Select(r => (r.Item1, "", r.Item2)).ToList(), 0.25, 4));
             Save(outDir, "random-access", t, RatioChart(t, "1,000 random reads: Tessera vs FlatBuffers", "Times faster per workload. Left of 1× Tessera is slower; log scale.",
                 compilers.Select((c, i) => (c, t.Compilers[i % t.Compilers.Length])).ToArray(), PerWorkload("random access x1000").Select(r => (r.Item1, "", r.Item2)).ToList(), 0.25, 4));
-            Save(outDir, "lookups", t, LookupChart(t, lookups));
+            Save(outDir, "lookups", t, LookupChart(t, lookups, scan));
         }
     }
 
@@ -239,10 +244,10 @@ public static class Charts
     }
 
     /// <summary>Dictionary lookups: Tessera and FlatBuffers per compiler, shared scale per group.</summary>
-    private static string LookupChart(Theme t, List<(string Group, string Label, double[] Values)> rows)
+    private static string LookupChart(Theme t, List<(string Group, string Label, double[] Values)> rows, string scan)
     {
         var sb = new StringBuilder();
-        double y = Header(sb, t, "Dictionary lookups", "Microseconds per 1,000 lookups among 5,000 entries; shorter is better. MessagePack scans its parsed tree (8–9 ms by string, 0.8–1.2 ms by int) and is left out.",
+        double y = Header(sb, t, "Dictionary lookups", "Microseconds per 1,000 lookups among 5,000 entries; shorter is better." + scan,
             new[] { ("Tessera (find)", t.Tessera), ("FlatBuffers (LookupByKey)", t.FlatBuffers) }) + 6;
         const double bar = 10, gap = 3, rowGap = 9, groupGap = 12;
         foreach (var group in rows.GroupBy(r => r.Group))
