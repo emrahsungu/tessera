@@ -46,6 +46,7 @@ internal sealed class ReadSchema
             }
 
             entries[i].IsDictionary = t.IsDictionary;
+            entries[i].FixedDefaults = t.FixedDefaults;
         }
 
         var schema = new ReadSchema { Entries = entries, Root = 0 };
@@ -162,6 +163,7 @@ internal sealed class ReadEntry
     public int FixedCount;
     public int FixedBytes;
     public bool IsDictionary;   // compiled schemas only: both vectors are always stored
+    public byte[]? FixedDefaults;   // compiled schemas only: the fixed cells holding their declared defaults (null: all zero)
 
     /// <summary>Per member, in wire order (fixed cells, cells, bools).</summary>
     public ulong[] Hash = Array.Empty<ulong>();

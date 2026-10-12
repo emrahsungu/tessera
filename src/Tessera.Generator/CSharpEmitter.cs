@@ -52,8 +52,15 @@ namespace Tessera.Generator
             {
                 string bytes = string.Join(", ", t.Entry.Select(b => "0x" + b.ToString("X2")));
                 string slots = string.Join(", ", t.RefSlots);
-                string dictionary = t is ObjectModel { Map: not null } ? ", dictionary: true" : "";
-                _w.Line($"public static readonly TesseraType T{t.Index} = new TesseraType({Naming.CsString(Display(t))}, 0x{t.Fingerprint:X16}UL, 0x{t.DeepFingerprint:X16}UL, new byte[] {{ {bytes} }}, new ushort[] {{ {slots} }}{dictionary});");
+                string extra = "";
+                if (t is ObjectModel o)
+                {
+                    byte[]? defaults = FixedDefaults(o);
+                    if (defaults != null) extra = $", {(o.Map != null ? "true" : "false")}, new byte[] {{ {string.Join(", ", defaults.Select(b => "0x" + b.ToString("X2")))} }}";
+                    else if (o.Map != null) extra = ", true";
+                }
+
+                _w.Line($"public static readonly TesseraType T{t.Index} = new TesseraType({Naming.CsString(Display(t))}, 0x{t.Fingerprint:X16}UL, 0x{t.DeepFingerprint:X16}UL, new byte[] {{ {bytes} }}, new ushort[] {{ {slots} }}{extra});");
             }
 
             _w.Line();
@@ -66,6 +73,45 @@ namespace Tessera.Generator
 
             _w.Close();
             _w.Close();
+        }
+
+        /// <summary>
+        /// The fixed cells of <paramref name="o"/> holding their declared defaults, or null when they are all zero: what a
+        /// reader writes for fixed cells that a buffer of an older version lacks.
+        /// </summary>
+        private static byte[]? FixedDefaults(ObjectModel o)
+        {
+            if (o.FixedSize == 0) return null;
+            var bytes = new byte[o.FixedSize];
+            bool any = false;
+            foreach (var m in o.Fixed)
+            {
+                if (m.Value.Kind == WireKind.Struct || m.DefaultValue == null) continue;
+                ulong bits = DefaultBits(m);
+                for (int i = 0; i < m.CellSize; i++)
+                {
+                    bytes[m.FixedOffset + i] = (byte)(bits >> (8 * i));
+                    any |= bytes[m.FixedOffset + i] != 0;
+                }
+            }
+
+            return any ? bytes : null;
+        }
+
+        /// <summary>The bit pattern of a scalar member's declared default, little-endian in its cell.</summary>
+        private static ulong DefaultBits(MemberModel m)
+        {
+            object d = m.DefaultValue!;
+            switch (m.Value.Kind)
+            {
+                case WireKind.Float32: return (uint)BitConverter.ToInt32(BitConverter.GetBytes(Convert.ToSingle(d, CultureInfo.InvariantCulture)), 0);
+                case WireKind.Float64: return (ulong)BitConverter.DoubleToInt64Bits(Convert.ToDouble(d, CultureInfo.InvariantCulture));
+                case WireKind.Char16: return d is char c ? c : Convert.ToUInt16(d, CultureInfo.InvariantCulture);
+                case WireKind.Bool: return d is bool b && b ? 1UL : 0UL;
+                case WireKind.UInt64: return Convert.ToUInt64(d, CultureInfo.InvariantCulture);
+                default:
+                    return d is ulong u ? u : unchecked((ulong)Convert.ToInt64(d, CultureInfo.InvariantCulture));
+            }
         }
 
         private static string Display(TypeModel t)

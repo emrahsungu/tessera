@@ -38,21 +38,49 @@ public static class TesseraReader
         options ??= TesseraReadOptions.Default;
         error = CheckHeader(buffer, out int rootAt);
         if (error != TesseraReadError.None) return ref Zeros;
-        if (BinaryPrimitives.ReadUInt64LittleEndian(buffer.Slice(8)) != root.DeepFingerprint)
+        ReadSchema reader = root.ReadSchema ??= ReadSchema.FromTypes(root);
+        if (BinaryPrimitives.ReadUInt64LittleEndian(buffer.Slice(8)) == root.DeepFingerprint)
         {
-            // Written with other versions of the classes: matched field by field and translated (not yet supported).
+            if (options.Verify)
+            {
+                error = Verifier.Check(buffer, reader, rootAt, options);
+                if (error != TesseraReadError.None) return ref Zeros;
+            }
+
+            return ref Unsafe.Add(ref MemoryMarshal.GetReference(buffer), rootAt);
+        }
+
+        // Written with other versions of the classes: matched member by member, by name, through the schema section the
+        // buffer carries, checked against that schema, and translated once into this program's layout.
+        if ((buffer[7] & WireFormat.FlagSchema) == 0)
+        {
+            error = TesseraReadError.SchemaMismatch;
+            return ref Zeros;
+        }
+
+        if (!ReadSchema.TryParseSection(buffer, out ReadSchema writer))
+        {
+            error = TesseraReadError.BadSchema;
+            return ref Zeros;
+        }
+
+        Binding? binding = new Binder(reader, writer).Bind(reader.Root, writer.Root);
+        if (binding == Binding.Incompatible)
+        {
             error = TesseraReadError.SchemaMismatch;
             return ref Zeros;
         }
 
         if (options.Verify)
         {
-            ReadSchema schema = root.ReadSchema ??= ReadSchema.FromTypes(root);
-            error = Verifier.Check(buffer, schema, rootAt, options);
+            error = Verifier.Check(buffer, writer, rootAt, options);
             if (error != TesseraReadError.None) return ref Zeros;
         }
 
-        return ref Unsafe.Add(ref MemoryMarshal.GetReference(buffer), rootAt);
+        // The same layout throughout, though the fingerprints differ: read in place.
+        if (binding == null) return ref Unsafe.Add(ref MemoryMarshal.GetReference(buffer), rootAt);
+        byte[] translated = Translator.Translate(buffer, reader, rootAt, binding, out int translatedRoot);
+        return ref translated[translatedRoot];
     }
 
     /// <summary>Checks the 16-byte header; <paramref name="root"/> is the top-level object's position.</summary>
