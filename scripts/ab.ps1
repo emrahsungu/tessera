@@ -1,6 +1,6 @@
 # A/B benchmark: a candidate (B) against a baseline (A), on the same machine, in alternating order (AB, BA, AB, BA)
 # so drift affects both alike. FlatBuffers and MessagePack run unchanged on both sides, so their deltas show the noise.
-# Both sides are built in their own git worktrees under .ab/, so the working tree can keep changing meanwhile.
+# Both sides are built in their own git worktrees (in the temp folder), so the working tree can keep changing meanwhile.
 #   scripts/ab.ps1 -Candidate HEAD                    B = the last commit, A = its parent
 #   scripts/ab.ps1 -Baseline <ref> -Candidate <ref>   any two commits (the same ref twice measures the noise)
 #   scripts/ab.ps1 -Compilers msvc                    fewer compilers; -NoNative / -NoDotnet to skip a side
@@ -32,8 +32,13 @@ function VsGenerator {
     return ($g -replace '^\* (Visual Studio \d+ \d{4}).*$', '$1')
 }
 $ab = Join-Path $root '.ab'
-$base = Join-Path $ab 'base'
-$cand = Join-Path $ab 'cand'
+# The two worktrees live outside the repository: BenchmarkDotNet finds a benchmark's project by searching the
+# repository for its file name, and stops when the worktrees put more copies of it there. One folder per clone.
+$sha256 = [Security.Cryptography.SHA256]::Create()
+$cloneKey = [BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($root.ToLowerInvariant()))).Replace('-', '').Substring(0, 8)
+$trees = Join-Path ([IO.Path]::GetTempPath()) "tessera-ab-$cloneKey"
+$base = Join-Path $trees 'base'
+$cand = Join-Path $trees 'cand'
 $results = if ($Results) { [IO.Path]::GetFullPath($Results) } else { Join-Path $ab 'results' }
 if (-not $Baseline) { $Baseline = "$Candidate~1" }
 $inv = [System.Globalization.CultureInfo]::InvariantCulture
@@ -52,14 +57,32 @@ function Run([string]$what, [scriptblock]$block) {
 
 if (-not $ReportOnly) {
     # ---------------------------------------------------------------------------------------------------- baseline tree
-    New-Item -ItemType Directory -Force $ab | Out-Null
+    New-Item -ItemType Directory -Force $ab, $trees | Out-Null
     if (Test-Path $results) { Get-ChildItem $results -File | Remove-Item -Force }
     New-Item -ItemType Directory -Force $results | Out-Null
+    # Earlier versions of this script kept the worktrees under .ab/, linked to .deps with a junction. Remove them,
+    # unlinking the junction first: deleting a folder that holds a junction can delete the junction's target.
+    foreach ($old in (Join-Path $ab 'base'), (Join-Path $ab 'cand')) {
+        if (-not (Test-Path (Join-Path $old '.git'))) { continue }
+        $link = Join-Path $old '.deps'
+        if ((Test-Path $link) -and (Get-Item $link -Force).LinkType) { cmd /c rmdir "$link" | Out-Null }
+        Run "remove the old worktree $old" { git -C $root worktree remove --force $old 2>&1 | Out-Null }
+    }
+    # Both sides use this repository's .deps (scripts/deps.ps1). Commits before TESSERA_DEPS read FlatBuffers' C#
+    # sources and canada.json from their own .deps, so each worktree also gets a copy of those (not a link, see above).
+    Run 'dependencies' { & (Join-Path $PSScriptRoot 'deps.ps1') }
+    $env:TESSERA_DEPS = Join-Path $root '.deps'
     function Worktree([string]$path, [string]$ref) {
         $sha = (git -C $root rev-parse $ref).Trim()
         if (-not (Test-Path (Join-Path $path '.git'))) { Run "worktree $ref" { git -C $root worktree add --detach $path $sha 2>&1 | Out-Null } }
         else { Run "checkout $ref" { git -C $path checkout --detach --force $sha 2>&1 | Out-Null } }
-        if (-not (Test-Path (Join-Path $path '.deps'))) { New-Item -ItemType Junction -Path (Join-Path $path '.deps') -Target (Join-Path $root '.deps') | Out-Null }
+        $deps = Join-Path $path '.deps'
+        if (-not (Test-Path (Join-Path $deps 'flatbuffers/net'))) {
+            New-Item -ItemType Directory -Force (Join-Path $deps 'flatbuffers'), (Join-Path $deps 'downloads') | Out-Null
+            Copy-Item -Recurse (Join-Path $env:TESSERA_DEPS 'flatbuffers/net') (Join-Path $deps 'flatbuffers')
+            $canada = Join-Path $env:TESSERA_DEPS 'downloads/canada.json'
+            if (Test-Path $canada) { Copy-Item $canada (Join-Path $deps 'downloads') }
+        }
         return $sha
     }
     $sha = Worktree $base $Baseline
@@ -133,7 +156,7 @@ if (-not $ReportOnly) {
             }
             if (-not $NoDotnet) {
                 $proj = Join-Path $r 'benchmarks/Tessera.Benchmarks/Tessera.Benchmarks.csproj'
-                Run "$($s.Name) run $i (.NET write)" { dotnet run --project $proj -c Release --no-build -- --rounds $Rounds --round-ms ([Math]::Max(60, $RoundMs)) --warmup-ms 300 2>$null | Out-Null }
+                Run "$($s.Name) run $i (.NET write)" { dotnet run --project $proj -c Release --no-build -- --rounds $Rounds --round-ms ([Math]::Max(60, $RoundMs)) --warmup-ms 1000 @filterArgs 2>$null | Out-Null }
                 Copy-Item (Join-Path $r 'benchmarks/results/dotnet.json') (Join-Path $results "dotnet-$($s.Name)-$i.json")
             }
         }

@@ -1,23 +1,29 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.IO.Compression;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 using Bench;
-using Bench.Models;
-using Tessera;
+using BenchmarkDotNet.Columns;
+using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Diagnosers;
+using BenchmarkDotNet.Engines;
+using BenchmarkDotNet.Jobs;
+using BenchmarkDotNet.Loggers;
+using BenchmarkDotNet.Reports;
+using BenchmarkDotNet.Running;
 using MessagePack;
+using Perfolizer.Horology;
+using Tessera;
 
-// Usage: Tessera.Benchmarks [--export-only] [--quick] [--rounds N] [--round-ms N] [--warmup-ms N] [--filter text]
+// Usage: Tessera.Benchmarks [--export-only] [--quick] [--launches N] [--rounds N] [--round-ms N] [--warmup-ms N] [--filter text]
 //        Tessera.Benchmarks --report <results dir> <out.md>
-// 1. builds the workloads, 2. writes every library's buffer and the expected checksums for the C++ benchmark,
-// 3. times serialization (unless --export-only) and writes benchmarks/results/dotnet.json.
+// 1. builds the workloads, writes every library's buffer and the expected checksums for the C++ benchmark,
+// 2. times serialization with BenchmarkDotNet (unless --export-only) and writes benchmarks/results/dotnet.json:
+//    every case in --launches processes of its own (default 1), each N iterations of about --round-ms after warmup.
+//    Several launches matter: dynamic PGO does not settle on the same code in every process.
 // --filter keeps only cases whose "workload/library/variant" contains the text (for focused tuning).
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
 if (args.Length == 3 && args[0] == "--report")
@@ -34,177 +40,128 @@ if (args.Length == 3 && args[0] == "--report")
 bool exportOnly = args.Contains("--export-only");
 bool quick = args.Contains("--quick");
 int rounds = ArgInt("--rounds", quick ? 3 : 11);
-int roundMs = ArgInt("--round-ms", quick ? 30 : 100);
-int warmupMs = ArgInt("--warmup-ms", quick ? 200 : 1000);
+int roundMs = ArgInt("--round-ms", 100);
+// A second of warmup, quick or not: after less, some processes had not settled on their final optimized code yet
+// (Tessera's prefab write measured 83-373 µs in some processes after 180-500 ms, 78-80 µs in every one after 1 s).
+int warmupMs = ArgInt("--warmup-ms", 1000);
+int launches = ArgInt("--launches", 1);
 
-string root = FindRoot();
-string generated = Path.Combine(root, "benchmarks", "generated");
-string dataDir = Path.Combine(generated, "data");
-Directory.CreateDirectory(dataDir);
-
-var cases = new List<Case>();
-var sizes = new List<Dictionary<string, object>>();
-var expected = new Dictionary<string, string>();
-
-Add("prefab", DataGen.Prefab(), static (fb, x) => fb.Write(x), Checksum.Of);
-Add("monsters", DataGen.World(), static (fb, x) => fb.Write(x), Checksum.Of);
-Add("records", DataGen.Records(), static (fb, x) => fb.Write(x), Checksum.Of);
-var series = DataGen.Series();
-Add("series", series, static (fb, x) => fb.Write(x), Checksum.Of);
-AddFixed("series", FixedSeries.From(series));
-// Scene graphs of 1,024 nodes: dense, sparse, and 16 distinct nodes repeated.
-foreach (string scene in new[] { "dense-unique", "sparse-unique", "dense-shared" }) Add(scene, DataGen.Scene(scene), static (fb, x) => fb.Write(x), Checksum.Of);
-Add("lookup", DataGen.Lookup(), static (fb, x) => fb.Write(x), Checksum.Of);
-// Real data: canada.json, one GeoJSON polygon of 480 rings and 55,563 points (scripts/deps.ps1 fetches it).
-Add("canada", DataGen.Canada(Path.Combine(root, ".deps", "downloads", "canada.json")), static (fb, x) => fb.Write(x), Checksum.Of);
-
-File.WriteAllText(Path.Combine(dataDir, "expected.txt"), string.Join("\n", expected.Select(kv => $"{kv.Key} {kv.Value}")) + "\n");
+string root = Catalog.Root;
+string dataDir = Path.Combine(root, "benchmarks", "generated", "data");
+List<SizeRow> sizes = Catalog.Export(dataDir);
 Console.WriteLine($"Exported buffers to {dataDir}");
-PrintSizes();
+Console.WriteLine();
+Console.WriteLine("| Workload | Library | Bytes | gzip |");
+Console.WriteLine("|---|---|---:|---:|");
+foreach (var s in sizes) Console.WriteLine($"| {s.Workload} | {s.Library} | {s.Bytes:N0} | {s.Gzip:N0} |");
 if (exportOnly) return 0;
 
-// Run with one core and high priority to reduce noise.
-try
-{
-    using var p = Process.GetCurrentProcess();
-    p.PriorityClass = ProcessPriorityClass.High;
-    if (OperatingSystem.IsWindows() || OperatingSystem.IsLinux()) p.ProcessorAffinity = (IntPtr)(1 << 2);
-}
-catch (Exception e)
-{
-    Console.WriteLine("note: could not set priority/affinity: " + e.Message);
-}
-
 int filterAt = Array.IndexOf(args, "--filter");
-if (filterAt >= 0 && filterAt + 1 < args.Length)
+string filter = filterAt >= 0 && filterAt + 1 < args.Length ? args[filterAt + 1] : "";
+WriteBenchmarks.Selected = Catalog.Keys.Where(k => k.Contains(filter, StringComparison.Ordinal)).ToList();
+
+// One process per case and collections forced between iterations (both BenchmarkDotNet's defaults). Result arrays up
+// to 4 MB are allocated as ordinary objects that die young: with the default large-object threshold (85 KB), the full
+// collections that free them took time that varied erratically with the exact size (155 KB cost twice as much as
+// 240 KB), so equal work by two libraries could time differently. Not pinned to one core: .NET compiles the optimized
+// code on a background thread, which a pinned benchmark thread at BenchmarkDotNet's high priority starves, and the
+// cases then measured unoptimized code (4-6 times slower).
+var job = Job.Default
+    .WithLaunchCount(launches)
+    .WithWarmupCount(Math.Clamp((warmupMs + roundMs - 1) / Math.Max(1, roundMs), 2, 50))
+    .WithIterationCount(rounds)
+    .WithIterationTime(TimeInterval.FromMilliseconds(roundMs))
+    .WithUnrollFactor(1)
+    .WithEvaluateOverhead(false)
+    .WithGcServer(false)
+    .WithGcConcurrent(false)
+    .WithGcForce(true)
+    .WithEnvironmentVariables(new EnvironmentVariable("DOTNET_GCLOHThreshold", "0x400000"))
+    .WithId("write");
+var config = ManualConfig.CreateEmpty()
+    .AddJob(job)
+    .AddDiagnoser(MemoryDiagnoser.Default)
+    .AddColumnProvider(DefaultColumnProviders.Instance)
+    .AddLogger(new ProgressLogger())
+    .WithArtifactsPath(Path.Combine(root, "benchmarks", "results", "bdn"));
+Summary summary = BenchmarkRunner.Run<WriteBenchmarks>(config);
+
+var rows = new List<Dictionary<string, object>>();
+var failed = new List<string>();
+foreach (BenchmarkReport report in summary.Reports)
 {
-    string filter = args[filterAt + 1];
-    cases.RemoveAll(c => !$"{c.Workload}/{c.Library}/{c.Variant}".Contains(filter, StringComparison.Ordinal));
+    string key = (string)report.BenchmarkCase.Parameters["Case"];
+    double[] us = report.AllMeasurements
+        .Where(m => m.IterationMode == IterationMode.Workload && m.IterationStage == IterationStage.Actual)
+        .Select(m => m.Nanoseconds / m.Operations / 1000).ToArray();
+    if (us.Length == 0)
+    {
+        failed.Add(key);
+        continue;
+    }
+
+    string[] parts = key.Split('/', 3);
+    var st = Stats.Of(us);
+    rows.Add(new Dictionary<string, object>
+    {
+        ["workload"] = parts[0], ["library"] = parts[1], ["variant"] = parts[2],
+        ["median_us"] = st.Median, ["min_us"] = st.Min, ["max_us"] = st.Max, ["mad_percent"] = st.MadPercent,
+        ["alloc_bytes"] = (double)(report.GcStats.GetBytesAllocatedPerOperation(report.BenchmarkCase) ?? 0), ["samples_us"] = us,
+    });
 }
 
-Harness.Run(cases, rounds, roundMs, warmupMs, s => Console.Error.WriteLine(s));
-WriteResults();
+foreach (string key in WriteBenchmarks.Selected.Except(rows.Select(r => $"{r["workload"]}/{r["library"]}/{r["variant"]}")).Except(failed)) failed.Add(key);
+if (failed.Count > 0)
+{
+    Console.Error.WriteLine("BenchmarkDotNet produced no measurements for: " + string.Join(", ", failed) + " (logs in benchmarks/results/bdn)");
+    return 1;
+}
+
+// Report order: the catalog's.
+var order = Catalog.Keys.Select((k, i) => (k, i)).ToDictionary(x => x.k, x => x.i);
+rows.Sort((a, b) => order[$"{a["workload"]}/{a["library"]}/{a["variant"]}"].CompareTo(order[$"{b["workload"]}/{b["library"]}/{b["variant"]}"]));
+var outDir = Path.Combine(root, "benchmarks", "results");
+Directory.CreateDirectory(outDir);
+var doc = new Dictionary<string, object>
+{
+    ["environment"] = HostInfo(),
+    ["settings"] = new Dictionary<string, object> { ["launches"] = launches, ["rounds"] = rounds, ["round_ms"] = roundMs, ["tool"] = "BenchmarkDotNet " + Version(typeof(BenchmarkRunner)) },
+    ["write"] = rows,
+    ["sizes"] = sizes.Select(s => new Dictionary<string, object> { ["workload"] = s.Workload, ["library"] = s.Library, ["bytes"] = s.Bytes, ["gzip"] = s.Gzip }).ToList(),
+};
+File.WriteAllText(Path.Combine(outDir, "dotnet.json"), JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true }));
+
+Console.WriteLine();
+Console.WriteLine("| Workload | Library | Variant | Median µs | ±MAD | Alloc bytes/op |");
+Console.WriteLine("|---|---|---|---:|---:|---:|");
+foreach (var r in rows)
+{
+    Console.WriteLine($"| {r["workload"]} | {r["library"]} | {r["variant"]} | {(double)r["median_us"]:N1} | {(double)r["mad_percent"]:N1}% | {(double)r["alloc_bytes"]:N0} |");
+}
+
 return 0;
 
 // --------------------------------------------------------------------------------------------------------------------
 
-void Add<T>(string name, T data, Action<FbWriters, T> fbWrite, Func<T, ulong> checksum) where T : class
-{
-    var noShare = new TesseraOptions { Sharing = Sharing.None };
-    var noSchema = new TesseraOptions { IncludeSchema = false };
-    var all = new TesseraOptions { Sharing = Sharing.All };
-    var writer = new TesseraWriter();
-    var fb = new FbWriters(sharedStrings: false);
-    var fbShared = new FbWriters(sharedStrings: true);
-    var output = new ArrayBufferWriter<byte>(1 << 20);
-
-    var buffers = new List<(string Key, string Label, byte[] Bytes)>
-    {
-        ("tessera", "Tessera", TesseraSerializer.Serialize(data)),
-        ("tessera-noshare", "Tessera (no sharing)", TesseraSerializer.Serialize(data, noShare)),
-        ("tessera-noschema", "Tessera (no schema)", TesseraSerializer.Serialize(data, noSchema)),
-        ("tessera-all", "Tessera (full sharing)", TesseraSerializer.Serialize(data, all)),
-    };
-    fbWrite(fb, data);
-    buffers.Add(("fb", "FlatBuffers", fb.ToArray()));
-    fbWrite(fbShared, data);
-    buffers.Add(("fb-shared", "FlatBuffers (shared strings)", fbShared.ToArray()));
-    buffers.Add(("msgpack", "MessagePack", MessagePackSerializer.Serialize(data)));
-    foreach (var (key, _, bytes) in buffers) File.WriteAllBytes(Path.Combine(dataDir, $"{name}.{key}.bin"), bytes);
-    expected[name] = checksum(data).ToString(CultureInfo.InvariantCulture);
-    foreach (var (key, label, bytes) in buffers)
-    {
-        sizes.Add(new() { ["workload"] = name, ["library"] = label, ["bytes"] = bytes.Length, ["gzip"] = Gzip(bytes) });
-    }
-
-    cases.Add(new Case { Workload = name, Library = "Tessera", Variant = "to byte[]", Op = () => TesseraSerializer.Serialize(data).Length });
-    cases.Add(new Case { Workload = name, Library = "Tessera", Variant = "reused writer, no copy", Op = () => TesseraSerializer.Write(writer, data).Length });
-    cases.Add(new Case { Workload = name, Library = "Tessera (no sharing)", Variant = "to byte[]", Op = () => TesseraSerializer.Serialize(data, noShare).Length });
-    cases.Add(new Case { Workload = name, Library = "Tessera (full sharing)", Variant = "to byte[]", Op = () => TesseraSerializer.Serialize(data, all).Length });
-    cases.Add(new Case { Workload = name, Library = "FlatBuffers", Variant = "to byte[]", Op = () => { fbWrite(fb, data); return fb.ToArray().Length; } });
-    cases.Add(new Case { Workload = name, Library = "FlatBuffers", Variant = "reused builder, no copy", Op = () => { fbWrite(fb, data); return fb.Written.Count; } });
-    cases.Add(new Case { Workload = name, Library = "FlatBuffers (shared strings)", Variant = "to byte[]", Op = () => { fbWrite(fbShared, data); return fbShared.ToArray().Length; } });
-    cases.Add(new Case { Workload = name, Library = "MessagePack", Variant = "to byte[]", Op = () => MessagePackSerializer.Serialize(data).Length });
-    cases.Add(new Case
-    {
-        Workload = name, Library = "MessagePack", Variant = "reused buffer, no copy",
-        Op = () =>
-        {
-            output.ResetWrittenCount();
-            MessagePackSerializer.Serialize(output, data);
-            return output.WrittenCount;
-        },
-    });
-}
-
-// Tessera only: the workload's data in a model whose always-set values are fixed cells ([TesseraKeepDefault]).
-void AddFixed<T>(string name, T data) where T : class
-{
-    var writer = new TesseraWriter();
-    byte[] bytes = TesseraSerializer.Serialize(data);
-    File.WriteAllBytes(Path.Combine(dataDir, $"{name}.tessera-fixed.bin"), bytes);
-    sizes.Add(new() { ["workload"] = name, ["library"] = "Tessera (fixed)", ["bytes"] = bytes.Length, ["gzip"] = Gzip(bytes) });
-    cases.Add(new Case { Workload = name, Library = "Tessera (fixed)", Variant = "to byte[]", Op = () => TesseraSerializer.Serialize(data).Length });
-    cases.Add(new Case { Workload = name, Library = "Tessera (fixed)", Variant = "reused writer, no copy", Op = () => TesseraSerializer.Write(writer, data).Length });
-}
-
-static int Gzip(byte[] bytes)
-{
-    using var ms = new MemoryStream();
-    using (var z = new GZipStream(ms, CompressionLevel.Optimal, leaveOpen: true)) z.Write(bytes);
-    return (int)ms.Length;
-}
-
-void PrintSizes()
-{
-    Console.WriteLine();
-    Console.WriteLine("| Workload | Library | Bytes | gzip |");
-    Console.WriteLine("|---|---|---:|---:|");
-    foreach (var s in sizes) Console.WriteLine($"| {s["workload"]} | {s["library"]} | {s["bytes"]:N0} | {s["gzip"]:N0} |");
-}
-
-void WriteResults()
-{
-    var outDir = Path.Combine(root, "benchmarks", "results");
-    Directory.CreateDirectory(outDir);
-    var rows = cases.Select(c =>
-    {
-        var st = Harness.Summarize(c.NsPerOp);
-        return new Dictionary<string, object>
-        {
-            ["workload"] = c.Workload, ["library"] = c.Library, ["variant"] = c.Variant,
-            ["median_us"] = st.Median / 1000, ["min_us"] = st.Min / 1000, ["max_us"] = st.Max / 1000, ["mad_percent"] = st.MadPercent,
-            ["alloc_bytes"] = c.AllocatedBytesPerOp, ["output_bytes"] = c.OutputBytes, ["samples_us"] = c.NsPerOp.Select(x => x / 1000).ToArray(),
-        };
-    }).ToList();
-    var doc = new Dictionary<string, object>
-    {
-        ["environment"] = Environment(),
-        ["settings"] = new Dictionary<string, object> { ["rounds"] = rounds, ["round_ms"] = roundMs },
-        ["write"] = rows,
-        ["sizes"] = sizes,
-    };
-    File.WriteAllText(Path.Combine(outDir, "dotnet.json"), JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true }));
-
-    Console.WriteLine();
-    Console.WriteLine("| Workload | Library | Variant | Median µs | ±MAD | Alloc bytes/op |");
-    Console.WriteLine("|---|---|---|---:|---:|---:|");
-    foreach (var r in rows)
-    {
-        Console.WriteLine($"| {r["workload"]} | {r["library"]} | {r["variant"]} | {(double)r["median_us"]:N1} | {(double)r["mad_percent"]:N1}% | {(double)r["alloc_bytes"]:N0} |");
-    }
-}
-
-Dictionary<string, object> Environment() => new()
+Dictionary<string, object> HostInfo() => new()
 {
     ["dotnet"] = RuntimeInformation.FrameworkDescription,
     ["os"] = RuntimeInformation.OSDescription,
     ["cpu"] = CpuName(),
     ["tessera"] = typeof(TesseraWriter).Assembly.GetName().Version?.ToString() ?? "",
-    ["messagepack"] = typeof(MessagePackSerializer).Assembly.GetName().Version?.ToString() ?? "",
+    ["messagepack"] = Version(typeof(MessagePackSerializer)),
     ["flatbuffers"] = "25.12.19 (C# runtime built from the release source)",
+    ["benchmark_tool"] = "BenchmarkDotNet " + Version(typeof(BenchmarkRunner)),
     ["timestamp_utc"] = DateTime.UtcNow.ToString("u"),
 };
+
+// The package version (assembly versions are often fixed, such as 13.0.0.0 for every Newtonsoft.Json 13 release).
+static string Version(Type type)
+{
+    string? v = type.Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion;
+    return v == null ? type.Assembly.GetName().Version?.ToString() ?? "" : v.Split('+')[0];
+}
 
 static string CpuName()
 {
@@ -234,9 +191,41 @@ int ArgInt(string name, int fallback)
     return i >= 0 && i + 1 < args.Length && int.TryParse(args[i + 1], out int v) ? v : fallback;
 }
 
-static string FindRoot()
+/// <summary>Median, extremes and median absolute deviation of one case's iterations.</summary>
+internal sealed record Stats(double Median, double Min, double Max, double MadPercent)
 {
-    var dir = new DirectoryInfo(AppContext.BaseDirectory);
-    while (dir != null && !File.Exists(Path.Combine(dir.FullName, "global.json"))) dir = dir.Parent;
-    return dir?.FullName ?? throw new InvalidOperationException("repository root not found");
+    public static Stats Of(IReadOnlyList<double> samples)
+    {
+        double[] s = samples.OrderBy(x => x).ToArray();
+        double median = Middle(s);
+        double mad = Middle(s.Select(x => Math.Abs(x - median)).OrderBy(x => x).ToArray());
+        return new Stats(median, s[0], s[^1], median > 0 ? 100 * mad / median : 0);
+    }
+
+    private static double Middle(double[] s) => s.Length % 2 == 1 ? s[s.Length / 2] : (s[s.Length / 2 - 1] + s[s.Length / 2]) / 2;
+}
+
+/// <summary>Console output: one line per case and BenchmarkDotNet's errors (the full log goes to benchmarks/results/bdn).</summary>
+internal sealed class ProgressLogger : ILogger
+{
+    public string Id => nameof(ProgressLogger);
+
+    public int Priority => 0;
+
+    public void Write(LogKind logKind, string text)
+    {
+        if (logKind == LogKind.Error) Console.Error.Write(text);
+    }
+
+    public void WriteLine()
+    {
+    }
+
+    public void WriteLine(LogKind logKind, string text)
+    {
+        if (logKind == LogKind.Error || text.StartsWith("// Benchmark: ", StringComparison.Ordinal) || text.StartsWith("// ** Remained", StringComparison.Ordinal))
+            Console.Error.WriteLine(text);
+    }
+
+    public void Flush() => Console.Error.Flush();
 }

@@ -13,8 +13,14 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <!-- scripts/deps.ps1's folder; scripts/ab.ps1 points its worktrees at the repository's own with TESSERA_DEPS. -->
+  <PropertyGroup>
+    <TesseraDeps Condition="'$(TESSERA_DEPS)' != ''">$(TESSERA_DEPS)</TesseraDeps>
+    <TesseraDeps Condition="'$(TesseraDeps)' == ''">$(MSBuildThisFileDirectory)..\..\.deps</TesseraDeps>
+  </PropertyGroup>
+
   <ItemGroup>
-    <Compile Include="..\..\.deps\flatbuffers\net\FlatBuffers\*.cs" />
+    <Compile Include="$(TesseraDeps)\flatbuffers\net\FlatBuffers\*.cs" />
   </ItemGroup>
 
 </Project>
