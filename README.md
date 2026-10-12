@@ -164,12 +164,15 @@ C++ engine. Both sides are generated from the same C# source, so they cannot dri
 - **Zero-copy reads.** After one verification pass, every access is a plain load: no parsing, no allocations.
 - **Readable C++.** One header per type, `std::optional` for nullable members, `std::string_view` for strings,
   `enum class` with your names, and `const S&` straight into the buffer for plain structs.
-- **Fast.** Writes are 6.3× faster than FlatBuffers and 2.4× faster than MessagePack-CSharp, with no allocations
-  besides the resulting array (with a reused writer, none at all). Verifying a buffer is 2.7–4.1× faster than
-  FlatBuffers' verifier; verifying and then reading every field is 1.6–1.9× faster. Geometric means over the
-  benchmark workloads (per compiler for C++); see [Performance](#4-performance).
-- **Compact.** Absent members and default values take no space, and equal strings are stored once: buffers are up to
-  70% smaller than FlatBuffers' (1.3× on the geometric mean).
+- **Fast.** Saving is 6.4× faster than FlatBuffers, 2.3× faster than MessagePack-CSharp and 4.6× faster than
+  Google.Protobuf, with no memory allocated besides the result (none at all with a reused writer). Validating a buffer
+  is 2.7–4.0× faster than FlatBuffers' verifier; validating and then reading every field is 1.6–1.9× faster than with
+  FlatBuffers, and 4–18× faster than with MessagePack, Protocol Buffers or JSON, which must parse first. Geometric
+  means over the benchmark workloads (per compiler for C++). MemoryPack, a .NET-only format that can only be read from
+  the start, saves faster; see [Performance](#4-performance).
+- **Compact.** Fields that are null or equal to their default take no space, and equal strings are stored once:
+  buffers are up to 70% smaller than FlatBuffers' (1.3× on the geometric mean). MessagePack and Protocol Buffers,
+  which store small integers in fewer bytes, are about 10% smaller.
 - **Schema evolution by name.** Add, delete, reorder and rename members anywhere, with no field ids or deprecated
   slots; old and new readers keep working.
 - **Hardened.** About 450,000 fuzzed buffers per test run under GCC's AddressSanitizer and UBSan, MSVC and Clang, and
@@ -179,36 +182,44 @@ C++ engine. Both sides are generated from the same C# source, so they cannot dri
 ## 4. Performance
 
 Environment: Intel Core i7-6700K, Windows 10, .NET 10.0.12. C++ with clang-cl 19.1, MSVC 19.42 and GCC 15.2 (in WSL),
-each compiler with the same flags for every library (optimized, AVX2). Against FlatBuffers 25.12.19,
-MessagePack-CSharp 3.1.10 and msgpack-cxx 9.0.0. Medians of interleaved rounds; in .NET, every case starts on a
-collected heap, and result arrays are allocated as short-lived objects ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)
-explains why).
+each compiler with the same flags for every library (optimized, AVX2). Tessera is compared with:
+
+| Format | .NET writer | C++ reader |
+|---|---|---|
+| FlatBuffers 25.12.19 | FlatBuffers' builder, from the same objects | FlatBuffers |
+| MessagePack | MessagePack-CSharp 3.1.10 | msgpack-cxx 9.0.0 |
+| Protocol Buffers | Google.Protobuf 3.36.2, whose generated classes the objects are converted to on every save | libprotobuf 36.2 |
+| JSON | System.Text.Json (source-generated) and Newtonsoft.Json 13.0.4 | simdjson 5.0.3 |
+| MemoryPack | MemoryPack 1.21.4 | none: MemoryPack is .NET only, so it counts for saving and size |
 
 There are nine workloads: a UI prefab (400 objects with polymorphic components), a game world (1,000 monsters),
 2,000 sparse records (40 optional fields each), a 20,000-sample time series, three scene graphs of 1,024 nodes (dense,
 sparse, and 16 distinct nodes repeated), two dictionaries of 5,000 entries, and canada.json, the contour of Canada from
-the common JSON benchmarks: one GeoJSON polygon of 480 rings and 55,563 points. Every library writes the same C#
+the common JSON benchmarks: one GeoJSON polygon of 480 rings and 55,563 points. Every library saves the same C#
 objects, and every C++ reader computes a checksum over every field, which must match the C# objects before anything
 is timed.
 
-Summary: how many times faster (or smaller) Tessera is than FlatBuffers. A safe read verifies the buffer, then reads
-every field.
+Saving in .NET is timed with BenchmarkDotNet, every case in three processes of its own; C++ reads are medians of
+interleaved rounds. Tessera and FlatBuffers read a buffer where it lies. MessagePack, Protocol Buffers and JSON must
+parse it first, so for them, reading includes parsing; each parser runs its fastest way, measured, reusing its memory
+from one parse to the next. [docs/BENCHMARKS.md](docs/BENCHMARKS.md) has every table and the details.
 
-| Workload | .NET write | Size | Safe read, Clang | Safe read, GCC | Safe read, MSVC |
+How many times faster (or smaller) Tessera is, as the geometric mean over the nine workloads, with the range per
+workload in parentheses. A safe read validates the buffer, then reads every field.
+
+| | vs FlatBuffers | vs MessagePack | vs Protocol Buffers | vs JSON | vs MemoryPack |
 |---|---:|---:|---:|---:|---:|
-| prefab | 4.11× | 1.28× | 1.53× | 2.18× | 1.72× |
-| monsters | 4.68× | 1.18× | 1.50× | 1.69× | 1.43× |
-| records | 30.51× | 3.37× | 2.53× | 2.73× | 3.32× |
-| series | 5.34× | 1.00× | 1.89× | 1.97× | 1.80× |
-| dense-unique | 4.08× | 1.06× | 1.56× | 1.99× | 1.33× |
-| sparse-unique | 5.86× | 1.04× | 1.78× | 2.11× | 1.71× |
-| dense-shared | 5.26× | 1.32× | 1.46× | 2.03× | 1.33× |
-| lookup | 31.21× | 1.16× | 2.31× | 2.19× | 1.59× |
-| canada | 1.25× | 1.00× | 1.05× | 1.03× | 1.02× |
+| .NET write | 6.36× (1.39–31.3) | 2.29× (1.15–6.67) | 4.58× (2.70–23.0) | 14.4× (4.30–185) | 0.66× (0.45–0.84) |
+| Size | 1.27× (1.00–3.37) | 0.90× (0.59–2.01) | 0.92× (0.65–1.42) | 2.15× (1.30–3.04) | 1.28× (0.87–8.48) |
+| Safe read, Clang | 1.68× (1.05–2.52) | 5.72× (3.99–14.5) | 4.53× (2.21–9.81) | 11.7× (5.95–28.0) | |
+| Safe read, GCC | 1.86× (1.02–2.80) | 4.71× (3.71–10.2) | 4.05× (2.31–9.49) | 10.7× (5.40–25.2) | |
+| Safe read, MSVC | 1.62× (1.03–3.32) | 6.39× (4.45–17.1) | 5.12× (2.23–11.0) | 18.3× (5.59–56.0) | |
+
+Below 1, Tessera is slower or larger: see [Where Tessera is slower](#where-tessera-is-slower).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmarks/summary-dark.svg">
-  <img alt="Tessera against FlatBuffers and MessagePack, geometric means per metric and compiler" src="docs/images/benchmarks/summary-light.svg">
+  <img alt="Tessera against FlatBuffers, MessagePack, Protocol Buffers, JSON and MemoryPack, geometric means per metric and compiler" src="docs/images/benchmarks/summary-light.svg">
 </picture>
 
 These numbers describe these workloads on this machine; they are not guarantees. Measure with your own data.
@@ -217,26 +228,30 @@ These numbers describe these workloads on this machine; they are not guarantees.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmarks/write-dark.svg">
-  <img alt=".NET write time per workload for Tessera, FlatBuffers and MessagePack" src="docs/images/benchmarks/write-light.svg">
+  <img alt=".NET write time per workload for Tessera, FlatBuffers, MessagePack, MemoryPack, Protocol Buffers and System.Text.Json" src="docs/images/benchmarks/write-light.svg">
 </picture>
 
 ### Buffer size
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmarks/size-dark.svg">
-  <img alt="Buffer size per workload for Tessera, FlatBuffers and MessagePack" src="docs/images/benchmarks/size-light.svg">
+  <img alt="Buffer size per workload for Tessera, FlatBuffers, MessagePack, MemoryPack, Protocol Buffers and JSON" src="docs/images/benchmarks/size-light.svg">
 </picture>
 
-MessagePack stores small integers in one or two bytes, so it is smaller on six of the nine workloads; Tessera is
-smaller on the prefab, the sparse records and canada, whose doubles take nine bytes each in MessagePack. Tessera keeps
-values fixed-width so that they can be read in place.
+MessagePack and Protocol Buffers store small integers in one or two bytes, so they are smaller on six of the nine
+workloads, and MemoryPack, which stores no offsets, on four. Tessera stores values at their full width, so that C++
+can read them in place. It is the smallest on the prefab and the sparse records, and smaller than MessagePack and
+Protocol Buffers on canada, whose coordinates are doubles.
 
-### C++: verify, then read every field
+### C++: validate, then read every field
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmarks/safe-read-dark.svg">
-  <img alt="Verify then read every field, Tessera against FlatBuffers per workload and compiler" src="docs/images/benchmarks/safe-read-light.svg">
+  <img alt="Validate then read every field, Tessera against FlatBuffers per workload and compiler" src="docs/images/benchmarks/safe-read-light.svg">
 </picture>
+
+Against MessagePack, Protocol Buffers and JSON, which must parse the whole buffer first, a safe read is 2.2–56 times
+faster (the table above).
 
 ### C++: 1,000 random reads
 
@@ -254,16 +269,21 @@ values fixed-width so that they can be read in place.
 
 ### Where Tessera is slower
 
-- **Size, against MessagePack**, on six of the nine workloads (1.11–1.70×): MessagePack stores small integers in one
-  or two bytes; Tessera keeps values fixed-width so that they can be read in place.
-- **Time: nowhere by more than 1%.** Two GCC rows are within 1% of FlatBuffers: reading every field of the sparse
-  scene and of canada. There, all three libraries run at the speed of the benchmark's checksum, which mixes every
-  value into one running hash. MessagePack's C++ traversals and random reads run over a tree parsed beforehand, so
-  they are not compared.
+- **Saving in .NET, against MemoryPack**, on all nine workloads (1.20–2.22×). MemoryPack writes the fields one after
+  another, with nothing that would let a reader find a field without reading everything before it, and only .NET can
+  read it. Tessera also writes the offsets and bits that let C++ read any field directly. Without string sharing
+  (`Sharing.None`), Tessera comes within 6% on the prefab and the sparse scene; the sparse records stay 2.2 times
+  slower.
+- **Size, against MessagePack and Protocol Buffers** on six of the nine workloads (1.07–1.70×), and **MemoryPack** on
+  four (1.00–1.15×): see Buffer size above.
+- **C++ reads: by no more than 1.1%.** Reading every field ties with FlatBuffers on a few workloads (within 1.1%):
+  there, every library runs at the speed of the benchmark's checksum, which mixes every value into one running hash.
+  MessagePack's and Protocol Buffers' reads of an already parsed tree are not compared, because they leave the parse
+  out.
 
-With MSVC, the C++ readers' small helper functions are force-inlined, for all three libraries: MSVC stopped inlining
-them into one large function when it read Tessera, which made reading every field of the prefab 24% slower.
-FlatBuffers' and MessagePack's code does not change ([benchmarks/native/readers.hpp](benchmarks/native/readers.hpp)).
+With MSVC, the C++ readers' small helper functions are force-inlined, for every library: MSVC stopped inlining them
+into one large function when it read Tessera, which made reading every field of the prefab 24% slower. The other
+libraries' code does not change ([benchmarks/native/readers.hpp](benchmarks/native/readers.hpp)).
 
 The full list, computed from the results, is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
