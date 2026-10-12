@@ -256,9 +256,41 @@ namespace Tessera.Generator
 
             if (o.FixedSize > fixedEnd) _w.Line($"Unsafe.InitBlockUnaligned(ref Unsafe.Add(ref o, {4 * words + fixedEnd}), 0, {o.FixedSize - fixedEnd});");
 
-            _w.Line($"int pos = w.EndObject(TesseraSchema.T{o.Index}, size, at);");
+            if (o.RefCellCount == 0) _w.Line($"int pos = w.EndObject(TesseraSchema.T{o.Index}, size, at);");
+            else _w.Line($"int pos = w.ShareAll ? Share{o.Index}(w, size, at, {string.Join(", ", Enumerable.Range(0, words).Select(i => "h" + i))}) : at;");
             _w.Line("w.Exit();");
             _w.Line("return pos;");
+            _w.Close();
+            if (o.RefCellCount > 0) EmitShare(o);
+        }
+
+        /// <summary>
+        /// Deduplication (Sharing.All) of an object that holds offsets needs to know where they are: each one's place is
+        /// a count of the present cells before it, per cell size, from the header bits. A separate method, so that the
+        /// usual writes do not pay for it.
+        /// </summary>
+        private void EmitShare(ObjectModel o)
+        {
+            int words = o.HeaderWords, start = 4 * words + o.FixedSize;
+            _w.Line();
+            _w.Open($"private static int Share{o.Index}(TesseraWriter w, int size, int at, {string.Join(", ", Enumerable.Range(0, words).Select(i => "uint h" + i))})");
+            _w.Line($"Span<int> refs = stackalloc int[{o.RefCellCount}];");
+            _w.Line("int n = 0;");
+            for (int k = 0; k < o.Cells.Count; k++)
+            {
+                var m = o.Cells[k];
+                if (!WireFormat.IsReference(m.Value.Kind)) continue;
+                var terms = new List<string> { (start + (m.Value.Kind == WireKind.Union ? 4 : 0)).ToString(CultureInfo.InvariantCulture) };
+                foreach (var g in o.Cells.Take(k).GroupBy(c => c.CellSize).OrderBy(g => g.Key))
+                {
+                    string count = BitCount(g, words);
+                    terms.Add(g.Key == 1 ? count : $"{g.Key} * {count}");
+                }
+
+                _w.Line($"refs[n] = {string.Join(" + ", terms)}; n += (int)((h{m.Bit / 32} >> {m.Bit % 32}) & 1u);");
+            }
+
+            _w.Line($"return w.EndObject(TesseraSchema.T{o.Index}, size, at, refs.Slice(0, n));");
             _w.Close();
         }
 
@@ -407,7 +439,7 @@ namespace Tessera.Generator
                 _w.Line($"TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, {c}), at - {c}, {r});");
             }
 
-            _w.Line($"int pos = w.EndObject(TesseraSchema.T{o.Index}, 12, at);");
+            _w.Line($"int pos = w.EndMap(TesseraSchema.T{o.Index}, at);");
             _w.Line("w.Exit();");
             _w.Line("return pos;");
             _w.Close();

@@ -420,11 +420,25 @@ public sealed partial class TesseraWriter
     }
 
     /// <summary>
-    /// Completes an object started with <see cref="BeginObject"/> at <paramref name="position"/>. Returns its position
-    /// (an earlier equal object's position when <see cref="Sharing.All"/> is on).
+    /// Completes an object without offsets, started with <see cref="BeginObject"/> at <paramref name="position"/>.
+    /// Returns its position (an earlier equal object's position when <see cref="Sharing.All"/> is on).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public int EndObject(TesseraType type, int size, int position) => _shareAll ? InternObject(type, position, size) : position;
+    public int EndObject(TesseraType type, int size, int position) =>
+        _shareAll ? InternCanonical(position, size, type.Id + 0x10000, default) : position;
+
+    /// <summary>
+    /// Completes an object that holds offsets, with <see cref="Sharing.All"/> on: <paramref name="refOffsets"/> lists
+    /// where they are (from the object's start, ascending). Returns the position of an earlier equal object, or its own.
+    /// </summary>
+    public int EndObject(TesseraType type, int size, int position, ReadOnlySpan<int> refOffsets) =>
+        InternCanonical(position, size, type.Id + 0x10000, refOffsets);
+
+    private static readonly int[] s_mapOffsets = { 4, 8 };
+
+    /// <summary>Completes a dictionary's object (its two offsets after one header word) at <paramref name="position"/>.</summary>
+    public int EndMap(TesseraType type, int position) =>
+        _shareAll ? InternCanonical(position, 12, type.Id + 0x10000, s_mapOffsets) : position;
 
     /// <summary>Starts a shared (out-of-line) struct value; finish with <see cref="EndShared"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
