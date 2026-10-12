@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.Linq;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -69,30 +70,37 @@ public sealed class TesseraType
     internal int ReferenceOffsets(ReadOnlySpan<byte> item, Span<int> offsets)
     {
         ObjectCells cells = _cells ??= ObjectCells.From(this);
-        int n = 0, at = cells.Start;
-        for (int w = 0; w < cells.Masks.Length; w++)
+        int n = 0, before = cells.Start;   // where the present cells of this header word begin
+        int sizes = cells.Sizes.Length;
+        for (int w = 0; w < cells.RefMasks.Length; w++)
         {
-            uint bits = MemoryMarshal.Read<uint>(item.Slice(4 * w)) & cells.Masks[w];
-            while (bits != 0)
+            uint h = MemoryMarshal.Read<uint>(item.Slice(4 * w));
+            // Only the cells holding an offset are visited; each one's place is a count of the present cells before
+            // it, per cell size.
+            for (uint refs = h & cells.RefMasks[w]; refs != 0; refs &= refs - 1)
             {
-                int i = 32 * w + BitOperations.TrailingZeroCount(bits);
-                bits &= bits - 1;
-                if (cells.RefAt[i] >= 0) offsets[n++] = at + cells.RefAt[i];
-                at += cells.Size[i];
+                int bit = BitOperations.TrailingZeroCount(refs);
+                uint below = h & ((1u << bit) - 1);
+                int at = before + cells.RefAt[32 * w + bit];
+                for (int s = 0; s < sizes; s++) at += cells.Sizes[s] * BitOperations.PopCount(below & cells.SizeMasks[s * cells.RefMasks.Length + w]);
+                offsets[n++] = at;
             }
+
+            for (int s = 0; s < sizes; s++) before += cells.Sizes[s] * BitOperations.PopCount(h & cells.SizeMasks[s * cells.RefMasks.Length + w]);
         }
 
         return n;
     }
 
-    /// <summary>An object's optional cells, read from its schema entry: each one's size and where in it an offset is.</summary>
+    /// <summary>An object's optional cells, read from its schema entry: their sizes, and which ones hold an offset.</summary>
     private sealed class ObjectCells
     {
         public int Start;
         public int RefCount;
-        public uint[] Masks = Array.Empty<uint>();
-        public int[] Size = Array.Empty<int>();
-        public int[] RefAt = Array.Empty<int>();   // -1: no offset
+        public uint[] RefMasks = Array.Empty<uint>();    // per header word: the cells holding an offset
+        public int[] Sizes = Array.Empty<int>();         // the distinct cell sizes
+        public uint[] SizeMasks = Array.Empty<uint>();   // per size, per header word: the cells of that size
+        public int[] RefAt = Array.Empty<int>();         // per cell: where in it the offset is (a union's comes after its tag)
 
         public static ObjectCells From(TesseraType type)
         {
@@ -106,39 +114,42 @@ public sealed class TesseraType
             int fixedCount = hasFixed ? BinaryPrimitives.ReadUInt16LittleEndian(e.Slice(28)) : 0;
             int fixedBytes = hasFixed ? BinaryPrimitives.ReadUInt16LittleEndian(e.Slice(30)) : 0;
             int first = (hasFixed ? 32 : 28) + 12 * fixedCount;
-            var cells = new ObjectCells { Start = 4 * words + fixedBytes, Masks = new uint[words], Size = new int[count], RefAt = new int[count] };
+            var size = new int[count];
+            var cells = new ObjectCells { Start = 4 * words + fixedBytes, RefMasks = new uint[words], RefAt = new int[count] };
             for (int i = 0; i < count; i++)
             {
                 int f = first + 12 * i;
                 var kind = (WireKind)e[f + 8];
-                cells.Masks[i >> 5] |= 1u << (i & 31);
-                cells.RefAt[i] = -1;
                 switch (kind)
                 {
                     case WireKind.Struct:
                         // A struct entry holds its size right after the common header.
                         int reference = BinaryPrimitives.ReadUInt16LittleEndian(e.Slice(f + 10));
-                        cells.Size[i] = BinaryPrimitives.ReadUInt16LittleEndian(type.References[reference].Entry.AsSpan(24));
+                        size[i] = BinaryPrimitives.ReadUInt16LittleEndian(type.References[reference].Entry.AsSpan(24));
                         break;
                     case WireKind.Union:
-                        cells.Size[i] = 8;   // a tag, then the offset
+                        size[i] = 8;   // a tag, then the offset
                         cells.RefAt[i] = 4;
+                        cells.RefMasks[i >> 5] |= 1u << (i & 31);
                         cells.RefCount++;
                         break;
                     case WireKind.String:
                     case WireKind.Object:
                     case WireKind.Vector:
                     case WireKind.SharedStruct:
-                        cells.Size[i] = 4;
-                        cells.RefAt[i] = 0;
+                        size[i] = 4;
+                        cells.RefMasks[i >> 5] |= 1u << (i & 31);
                         cells.RefCount++;
                         break;
                     default:
-                        cells.Size[i] = WireFormat.CellSize(kind);
+                        size[i] = WireFormat.CellSize(kind);
                         break;
                 }
             }
 
+            cells.Sizes = size.Distinct().ToArray();
+            cells.SizeMasks = new uint[cells.Sizes.Length * words];
+            for (int i = 0; i < count; i++) cells.SizeMasks[Array.IndexOf(cells.Sizes, size[i]) * words + (i >> 5)] |= 1u << (i & 31);
             return cells;
         }
     }
