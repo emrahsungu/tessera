@@ -72,6 +72,8 @@ namespace Tessera.Generator
         public string CppName = "";
         public string Access = "";      // C# expression suffix, e.g. ".X"
         public string? PrivateAccessor; // UnsafeAccessor method for private fields
+        public string FieldName = "";    // the field itself (an auto-property's is its backing field)
+        public bool FieldAccessible;     // the field can be named in generated code (else it is set through an UnsafeAccessor)
         public WireKind Kind;
         public EnumModel? Enum;
         public StructModel? Struct;     // nested struct

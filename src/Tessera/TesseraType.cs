@@ -20,6 +20,18 @@ public sealed class TesseraType
     /// <param name="entry">Encoded schema entry; type references hold indices into <see cref="SetReferences"/>.</param>
     /// <param name="refSlots">Byte offsets of the 16-bit type references inside <paramref name="entry"/>.</param>
     public TesseraType(string name, ulong fingerprint, ulong deepFingerprint, byte[] entry, ushort[] refSlots)
+        : this(name, fingerprint, deepFingerprint, entry, refSlots, false)
+    {
+    }
+
+    /// <summary>Creates a type entry. Called by generated code.</summary>
+    /// <param name="name">Display name (C# type name).</param>
+    /// <param name="fingerprint">Fingerprint of the type's own layout.</param>
+    /// <param name="deepFingerprint">Fingerprint of the type and everything reachable from it.</param>
+    /// <param name="entry">Encoded schema entry; type references hold indices into <see cref="SetReferences"/>.</param>
+    /// <param name="refSlots">Byte offsets of the 16-bit type references inside <paramref name="entry"/>.</param>
+    /// <param name="dictionary">Whether the type is a dictionary, whose keys and values are both always stored.</param>
+    public TesseraType(string name, ulong fingerprint, ulong deepFingerprint, byte[] entry, ushort[] refSlots, bool dictionary)
     {
         Id = Interlocked.Increment(ref s_nextId) - 1;
         Name = name;
@@ -27,6 +39,7 @@ public sealed class TesseraType
         DeepFingerprint = deepFingerprint;
         Entry = entry;
         RefSlots = refSlots;
+        IsDictionary = dictionary;
     }
 
     /// <summary>Process-wide dense id used by writers to track which entries a buffer needs.</summary>
@@ -49,6 +62,12 @@ public sealed class TesseraType
     internal ushort[] RefSlots { get; }
 
     internal TesseraType[] References => _refs;
+
+    /// <summary>Whether the type is a dictionary: an object whose two vectors, keys and values, are always stored.</summary>
+    internal bool IsDictionary { get; }
+
+    /// <summary>The schema of the types reachable from this one, prepared for reading (built on first use).</summary>
+    internal ReadSchema? ReadSchema;
 
     /// <summary>Sets the types referenced by <see cref="Entry"/> (separate step so cyclic models can be built).</summary>
     public void SetReferences(params TesseraType[] references) => _refs = references;

@@ -707,7 +707,7 @@ namespace Tessera.Generator
                     return null;
                 }
 
-                var sf = new StructField { Name = f.AssociatedSymbol?.Name ?? f.Name };
+                var sf = new StructField { Name = f.AssociatedSymbol?.Name ?? f.Name, FieldName = f.Name, FieldAccessible = f.AssociatedSymbol == null && IsAccessible(f) };
                 ITypeSymbol ft = f.Type;
                 WireKind k = Primitive(ft.SpecialType);
                 if (k == WireKind.String) k = WireKind.Invalid;

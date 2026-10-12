@@ -52,7 +52,8 @@ namespace Tessera.Generator
             {
                 string bytes = string.Join(", ", t.Entry.Select(b => "0x" + b.ToString("X2")));
                 string slots = string.Join(", ", t.RefSlots);
-                _w.Line($"public static readonly TesseraType T{t.Index} = new TesseraType({Naming.CsString(Display(t))}, 0x{t.Fingerprint:X16}UL, 0x{t.DeepFingerprint:X16}UL, new byte[] {{ {bytes} }}, new ushort[] {{ {slots} }});");
+                string dictionary = t is ObjectModel { Map: not null } ? ", dictionary: true" : "";
+                _w.Line($"public static readonly TesseraType T{t.Index} = new TesseraType({Naming.CsString(Display(t))}, 0x{t.Fingerprint:X16}UL, 0x{t.DeepFingerprint:X16}UL, new byte[] {{ {bytes} }}, new ushort[] {{ {slots} }}{dictionary});");
             }
 
             _w.Line();
