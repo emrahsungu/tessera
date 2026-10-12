@@ -18,10 +18,13 @@ namespace Tessera;
 public sealed partial class TesseraWriter
 {
     private byte[] _buf;
+    private int _end;    // _buf.Length: a position is one subtraction away
     private int _head;
     private int _savedPos;
     private int _depth;
     private TesseraOptions _options = TesseraOptions.Default;
+    private int _maxDepth;
+    private bool _writeDefaults;
     private bool _shareStrings;
     private bool _shareAll;
     private bool _finished;
@@ -36,7 +39,8 @@ public sealed partial class TesseraWriter
     {
         if (!BitConverter.IsLittleEndian) throw new PlatformNotSupportedException("Tessera requires a little-endian platform.");
         _buf = GC.AllocateUninitializedArray<byte>(Math.Max(64, initialCapacity));
-        _head = _buf.Length;
+        _end = _buf.Length;
+        _head = _end;
         Options = options;
     }
 
@@ -49,12 +53,14 @@ public sealed partial class TesseraWriter
             _options = value ?? throw new ArgumentNullException(nameof(value));
             _shareStrings = value.Sharing != Sharing.None;
             _shareAll = value.Sharing == Sharing.All;
+            _maxDepth = value.MaxDepth;
+            _writeDefaults = value.WriteDefaults;
             Reset();
         }
     }
 
     /// <summary>True when members equal to their default must still be written.</summary>
-    public bool WriteDefaults => _options.WriteDefaults;
+    public bool WriteDefaults => _writeDefaults;
 
     /// <summary>True when objects, vectors and shared structs are deduplicated.</summary>
     public bool ShareAll => _shareAll;
@@ -63,7 +69,7 @@ public sealed partial class TesseraWriter
     public int Position
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _buf.Length - _head;
+        get => _end - _head;
     }
 
     /// <summary>The finished buffer. Valid until the next write or <see cref="Reset"/>.</summary>
@@ -81,7 +87,7 @@ public sealed partial class TesseraWriter
     /// <summary>Clears the writer for a new buffer, keeping its memory.</summary>
     public void Reset()
     {
-        _head = _buf.Length;
+        _head = _end;
         _depth = 0;
         _refTop = 0;
         _finished = false;
@@ -104,8 +110,9 @@ public sealed partial class TesseraWriter
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref byte Reserve(int size, int align, int alignAt)
     {
-        _savedPos = Position;
-        int pad = (-(Position + alignAt)) & (align - 1);
+        int position = _end - _head;
+        _savedPos = position;
+        int pad = (-(position + alignAt)) & (align - 1);
         int need = pad + size;
         if (_head < need + ScratchBytes) Grow(need + ScratchBytes);
         int start = _head - need;
@@ -119,7 +126,7 @@ public sealed partial class TesseraWriter
 
     private void Grow(int need)
     {
-        int used = _buf.Length - _head;
+        int used = _end - _head;
         long wanted = Math.Max((long)_buf.Length * 2, (long)used + need + 256);
         if (wanted > Array.MaxLength)
         {
@@ -131,12 +138,13 @@ public sealed partial class TesseraWriter
         Buffer.BlockCopy(_buf, _head, next, next.Length - used, used);
         _head = next.Length - used;
         _buf = next;
+        _end = next.Length;
     }
 
     /// <summary>Discards the item reserved by the last Reserve/Begin call (used when an equal item already exists).</summary>
-    private void Rollback() => _head = _buf.Length - _savedPos;
+    private void Rollback() => _head = _end - _savedPos;
 
-    private Span<byte> ItemSpan(int pos, int size) => _buf.AsSpan(_buf.Length - pos, size);
+    private Span<byte> ItemSpan(int pos, int size) => _buf.AsSpan(_end - pos, size);
 
     // ------------------------------------------------------------------ depth
 
@@ -147,14 +155,14 @@ public sealed partial class TesseraWriter
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Enter()
     {
-        if (++_depth > _options.MaxDepth) ThrowTooDeep();
+        if (++_depth > _maxDepth) ThrowTooDeep();
     }
 
     /// <summary>Checks that a leaf level (a vector of scalars or structs) still fits under <see cref="TesseraOptions.MaxDepth"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void EnterLeaf()
     {
-        if (_depth >= _options.MaxDepth) ThrowTooDeep();
+        if (_depth >= _maxDepth) ThrowTooDeep();
     }
 
     /// <summary>Leaves one nesting level.</summary>
@@ -199,7 +207,7 @@ public sealed partial class TesseraWriter
         if (_pendingCount != 0) AddPendingStrings();  // an earlier dictionary's keys: the lookups below must find them
         int start = Position, refTop = _refTop;
         if (WriteKeys(keys, count, checkOrder: true, out int position)) return position;
-        _head = _buf.Length - start;
+        _head = _end - start;
         _refTop = refTop;
         Array.Clear(_pendingStrings, 0, _pendingCount);
         _pendingCount = 0;
@@ -400,16 +408,23 @@ public sealed partial class TesseraWriter
 
     /// <summary>
     /// Starts an object of <paramref name="size"/> bytes (header words plus cells). The cell area (the last
-    /// <paramref name="cellBytes"/> bytes) is aligned to <paramref name="cellAlign"/>.
+    /// <paramref name="cellBytes"/> bytes) is aligned to <paramref name="cellAlign"/>. <paramref name="position"/> is
+    /// the object's position.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref byte BeginObject(int size, int cellBytes, int cellAlign) => ref Reserve(size, cellAlign < 4 ? 4 : cellAlign, cellBytes);
+    public ref byte BeginObject(int size, int cellBytes, int cellAlign, out int position)
+    {
+        ref byte first = ref Reserve(size, cellAlign < 4 ? 4 : cellAlign, cellBytes);
+        position = _end - _head;
+        return ref first;
+    }
 
     /// <summary>
-    /// Completes an object started with <see cref="BeginObject"/>. Returns the object's position (an earlier equal
-    /// object's position when <see cref="Sharing.All"/> is on).
+    /// Completes an object started with <see cref="BeginObject"/> at <paramref name="position"/>. Returns its position
+    /// (an earlier equal object's position when <see cref="Sharing.All"/> is on).
     /// </summary>
-    public int EndObject(TesseraType type, int size) => _shareAll ? InternObject(type, Position, size) : Position;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int EndObject(TesseraType type, int size, int position) => _shareAll ? InternObject(type, position, size) : position;
 
     /// <summary>Starts a shared (out-of-line) struct value; finish with <see cref="EndShared"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -456,5 +471,5 @@ public sealed partial class TesseraWriter
     public static void Write<T>(ref byte destination, T value) where T : unmanaged => Unsafe.WriteUnaligned(ref destination, value);
 
     /// <summary>Reads back a u32 at <paramref name="pos"/> (test and tooling helper).</summary>
-    internal uint ReadUInt32(int pos) => BinaryPrimitives.ReadUInt32LittleEndian(_buf.AsSpan(_buf.Length - pos, 4));
+    internal uint ReadUInt32(int pos) => BinaryPrimitives.ReadUInt32LittleEndian(_buf.AsSpan(_end - pos, 4));
 }

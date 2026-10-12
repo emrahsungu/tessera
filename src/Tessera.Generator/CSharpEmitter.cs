@@ -236,8 +236,7 @@ namespace Tessera.Generator
 
             int start = 4 * words + o.FixedSize; // the first optional cell
             _w.Line($"int size = {start} + cells;");
-            _w.Line(o.FixedSize > 0 ? $"ref byte o = ref w.BeginObject(size, {o.FixedSize} + cells, {align});" : $"ref byte o = ref w.BeginObject(size, cells, {align});");
-            _w.Line("int at = w.Position;");
+            _w.Line(o.FixedSize > 0 ? $"ref byte o = ref w.BeginObject(size, {o.FixedSize} + cells, {align}, out int at);" : $"ref byte o = ref w.BeginObject(size, cells, {align}, out int at);");
 
             // 3. Cells. Whether each one is stored is read from the header bits alone, so a field that another thread
             // changes in the meantime can change what is stored, never where.
@@ -257,7 +256,7 @@ namespace Tessera.Generator
 
             if (o.FixedSize > fixedEnd) _w.Line($"Unsafe.InitBlockUnaligned(ref Unsafe.Add(ref o, {4 * words + fixedEnd}), 0, {o.FixedSize - fixedEnd});");
 
-            _w.Line($"int pos = w.EndObject(TesseraSchema.T{o.Index}, size);");
+            _w.Line($"int pos = w.EndObject(TesseraSchema.T{o.Index}, size, at);");
             _w.Line("w.Exit();");
             _w.Line("return pos;");
             _w.Close();
@@ -399,8 +398,7 @@ namespace Tessera.Generator
             _w.Line($"{keyPool}.Return(keys);");
             _w.Line($"{valuePool}.Return(values);");
             // Both cells are always present (an empty dictionary has empty vectors).
-            _w.Line("ref byte o = ref w.BeginObject(12, 8, 4);");
-            _w.Line("int at = w.Position;");
+            _w.Line("ref byte o = ref w.BeginObject(12, 8, 4, out int at);");
             _w.Line($"Unsafe.WriteUnaligned(ref o, 0x{(1u << o.Cells[0].Bit) | (1u << o.Cells[1].Bit):X}u);");
             for (int i = 0; i < 2; i++)
             {
@@ -409,7 +407,7 @@ namespace Tessera.Generator
                 _w.Line($"TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, {c}), at - {c}, {r});");
             }
 
-            _w.Line($"int pos = w.EndObject(TesseraSchema.T{o.Index}, 12);");
+            _w.Line($"int pos = w.EndObject(TesseraSchema.T{o.Index}, 12, at);");
             _w.Line("w.Exit();");
             _w.Line("return pos;");
             _w.Close();
