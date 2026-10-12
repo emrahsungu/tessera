@@ -37,7 +37,7 @@ public static class TesseraReader
     public static ref readonly byte Open(ReadOnlySpan<byte> buffer, TesseraType root, TesseraVerifyFunc verify, TesseraReadOptions? options,
         out TesseraReadError error)
     {
-        error = Open(buffer, root, verify, options ?? TesseraReadOptions.Default, out ReadOnlySpan<byte> data, out int rootAt, out _);
+        error = Open(buffer, root, verify, options ?? TesseraReadOptions.Default, out ReadOnlySpan<byte> data, out int rootAt, out _, out _);
         return ref error == TesseraReadError.None ? ref Unsafe.Add(ref MemoryMarshal.GetReference(data), rootAt) : ref Zeros;
     }
 
@@ -45,18 +45,23 @@ public static class TesseraReader
     /// Checks <paramref name="buffer"/> as <see cref="Open(ReadOnlySpan{byte}, TesseraType, TesseraVerifyFunc, TesseraReadOptions?, out TesseraReadError)"/>
     /// does. <paramref name="data"/> is the buffer to read (a translated copy for other versions of the classes), with
     /// the top-level object at <paramref name="rootAt"/>; <paramref name="shared"/> says whether the check found that the
-    /// buffer shares items so often that it checked each once.
+    /// buffer shares items so often that it checked each once. Without <paramref name="verify"/>, a buffer written with
+    /// these classes is not checked beyond its header, and <paramref name="unchecked"/> says so: the caller checks it.
     /// </summary>
-    internal static TesseraReadError Open(ReadOnlySpan<byte> buffer, TesseraType root, TesseraVerifyFunc verify, TesseraReadOptions options,
-        out ReadOnlySpan<byte> data, out int rootAt, out bool shared)
+    internal static TesseraReadError Open(ReadOnlySpan<byte> buffer, TesseraType root, TesseraVerifyFunc? verify, TesseraReadOptions options,
+        out ReadOnlySpan<byte> data, out int rootAt, out bool shared, out bool @unchecked)
     {
         data = buffer;
         shared = false;
+        @unchecked = false;
         TesseraReadError error = CheckHeader(buffer, out rootAt);
         if (error != TesseraReadError.None) return error;
         if (BinaryPrimitives.ReadUInt64LittleEndian(buffer.Slice(8)) == root.DeepFingerprint)
         {
-            return options.Verify ? TesseraVerifier.Check(buffer, rootAt, options, verify, out shared) : TesseraReadError.None;
+            if (!options.Verify) return TesseraReadError.None;
+            if (verify != null) return TesseraVerifier.Check(buffer, rootAt, options, verify, out shared);
+            @unchecked = true;
+            return TesseraReadError.None;
         }
 
         return OpenOther(buffer, root, options, ref data, ref rootAt, out shared);

@@ -20,8 +20,11 @@ public static class TesseraModel<T>
     /// <summary>Generated check of buffers holding a <typeparamref name="T"/>, written with these classes.</summary>
     public static TesseraVerifyFunc? Verify { get; private set; }
 
-    /// <summary>Generated code that creates a <typeparamref name="T"/> from a buffer.</summary>
+    /// <summary>Generated code that creates a <typeparamref name="T"/> from a buffer checked before.</summary>
     public static TesseraDeserializeFunc<T>? Read { get; private set; }
+
+    /// <summary>Generated code that checks a buffer while it creates a <typeparamref name="T"/> from it.</summary>
+    public static TesseraDeserializeFunc<T>? ReadChecked { get; private set; }
 
     /// <summary>Called by generated module initializers.</summary>
     public static void Register(TesseraWriteFunc<T> write, TesseraType type)
@@ -32,10 +35,11 @@ public static class TesseraModel<T>
     }
 
     /// <summary>Called by generated module initializers.</summary>
-    public static void RegisterRead(TesseraType type, TesseraVerifyFunc verify, TesseraDeserializeFunc<T> read)
+    public static void RegisterRead(TesseraType type, TesseraVerifyFunc verify, TesseraDeserializeFunc<T> readChecked, TesseraDeserializeFunc<T> read)
     {
         Type ??= type;
         Verify = verify;
+        ReadChecked = readChecked;
         Read = read;
     }
 }
@@ -102,12 +106,26 @@ public static class TesseraSerializer
         TesseraReadOptions? options = null)
     {
         TesseraDeserializeFunc<T> read = TesseraModel<T>.Read ?? throw NoReader(typeof(T));
-        error = TesseraReader.Open(buffer, TesseraModel<T>.Type!, TesseraModel<T>.Verify!, options ?? TesseraReadOptions.Default,
-            out ReadOnlySpan<byte> data, out int root, out bool shared);
+        options ??= TesseraReadOptions.Default;
+        error = TesseraReader.Open(buffer, TesseraModel<T>.Type!, null, options, out ReadOnlySpan<byte> data, out int root, out bool shared, out bool @unchecked);
         if (error != TesseraReadError.None)
         {
             value = default;
             return false;
+        }
+
+        if (@unchecked)
+        {
+            // Written with these classes: checked while the objects are created, in one pass. At anything unusual (a
+            // damaged buffer, items shared heavily, a limit reached), the buffer is checked on its own, which says why it
+            // cannot be read or how to read it.
+            if (TesseraDeserializer.TryChecked(data, root, options, TesseraModel<T>.ReadChecked!, out value)) return true;
+            error = TesseraVerifier.Check(data, root, options, TesseraModel<T>.Verify!, out shared);
+            if (error != TesseraReadError.None)
+            {
+                value = default;
+                return false;
+            }
         }
 
         value = TesseraDeserializer.Run(data, root, shared, read);

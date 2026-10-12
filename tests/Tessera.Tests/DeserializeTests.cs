@@ -293,6 +293,49 @@ public class DeserializeTests
         Assert.Equal(TesseraReadError.SchemaMismatch, Assert.Throws<TesseraReadException>(() => TesseraSerializer.Deserialize<Monster>(weapon)).Error);
     }
 
+    /// <summary>
+    /// Deserialize checks a buffer while it creates the objects; it accepts exactly the damaged buffers that the read types
+    /// accept, with the same errors.
+    /// </summary>
+    [Fact]
+    public void DeserializeAcceptsWhatReadAccepts()
+    {
+        var random = new Random(31337);
+        var utf8 = new TesseraReadOptions { ValidateUtf8 = true };
+        var shallow = new TesseraReadOptions { MaxDepth = 5, MaxItems = 400 };
+        var cases = new (byte[] Good, Func<byte[], TesseraReadOptions, TesseraReadError> Read, Func<byte[], TesseraReadOptions, TesseraReadError> Deserialize)[]
+        {
+            (TesseraSerializer.Serialize(Samples.Full()), (b, o) => Err(MonsterView.TryRead(b, out _, out var e, o), e),
+                (b, o) => Err(TesseraSerializer.TryDeserialize<Monster>(b, out _, out var e, o), e)),
+            (TesseraSerializer.Serialize(Samples.Full(), ShareAll), (b, o) => Err(MonsterView.TryRead(b, out _, out var e, o), e),
+                (b, o) => Err(TesseraSerializer.TryDeserialize<Monster>(b, out _, out var e, o), e)),
+            (TesseraSerializer.Serialize(Samples.Catalog()), (b, o) => Err(CatalogView.TryRead(b, out _, out var e, o), e),
+                (b, o) => Err(TesseraSerializer.TryDeserialize<Catalog>(b, out _, out var e, o), e)),
+            (TesseraSerializer.Serialize(Samples.Readings()), (b, o) => Err(ReadingsView.TryRead(b, out _, out var e, o), e),
+                (b, o) => Err(TesseraSerializer.TryDeserialize<Readings>(b, out _, out var e, o), e)),
+            (TesseraSerializer.Serialize(Samples.Swarm()), (b, o) => Err(SwarmView.TryRead(b, out _, out var e, o), e),
+                (b, o) => Err(TesseraSerializer.TryDeserialize<Swarm>(b, out _, out var e, o), e)),
+            (TesseraSerializer.Serialize(Samples.DagTwice(deepFirst: true), ShareAll), (b, o) => Err(NodeView.TryRead(b, out _, out var e, o), e),
+                (b, o) => Err(TesseraSerializer.TryDeserialize<Node>(b, out _, out var e, o), e)),
+        };
+        foreach (var (good, read, deserialize) in cases)
+        {
+            foreach (TesseraReadOptions options in new[] { TesseraReadOptions.Default, utf8, shallow })
+            {
+                Assert.Equal(read(good, options), deserialize(good, options));
+                for (int round = 0; round < 1500; round++)
+                {
+                    byte[] bad = (byte[])good.Clone();
+                    int flips = 1 + random.Next(3);
+                    for (int i = 0; i < flips; i++) bad[16 + random.Next(bad.Length - 16)] ^= (byte)(1 << random.Next(8));
+                    Assert.Equal(read(bad, options), deserialize(bad, options));
+                }
+            }
+        }
+
+        static TesseraReadError Err(bool ok, TesseraReadError error) => ok ? TesseraReadError.None : error;
+    }
+
     /// <summary>A damaged buffer is rejected, or reads as a valid one: nothing else is thrown.</summary>
     [Fact]
     public void DamagedBuffersAreSafe()
