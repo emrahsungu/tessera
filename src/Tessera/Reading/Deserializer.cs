@@ -17,28 +17,54 @@ namespace Tessera;
 [EditorBrowsable(EditorBrowsableState.Never)]
 public delegate T TesseraDeserializeFunc<out T>(ref TesseraDeserializer deserializer, ref byte item, int depth);
 
-/// <summary>Whether generated deserializers check the buffer as they read it (for generated code).</summary>
+/// <summary>
+/// How generated deserializers read (for generated code): a type argument, so that each way is compiled on its own, with
+/// the other ways' code left out.
+/// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
-public interface ITesseraChecks
+public interface ITesseraReadMode
 {
-    /// <summary>Whether to check.</summary>
-    static abstract bool On { get; }
+    /// <summary>Whether to check the buffer while reading it.</summary>
+    static abstract bool Check { get; }
+
+    /// <summary>Whether each stored object and list is created once and shared by its references.</summary>
+    static abstract bool Share { get; }
 }
 
 /// <summary>Generated deserializers that check the buffer as they read it (for generated code).</summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
-public readonly struct TesseraChecked : ITesseraChecks
+public readonly struct TesseraChecked : ITesseraReadMode
 {
     /// <inheritdoc/>
-    public static bool On => true;
+    public static bool Check => true;
+
+    /// <inheritdoc/>
+    public static bool Share => false;
 }
 
 /// <summary>Generated deserializers that read a buffer checked before, or trusted (for generated code).</summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
-public readonly struct TesseraUnchecked : ITesseraChecks
+public readonly struct TesseraUnchecked : ITesseraReadMode
 {
     /// <inheritdoc/>
-    public static bool On => false;
+    public static bool Check => false;
+
+    /// <inheritdoc/>
+    public static bool Share => false;
+}
+
+/// <summary>
+/// Generated deserializers that read a buffer checked before, or trusted, creating each stored item once (for generated
+/// code).
+/// </summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
+public readonly struct TesseraShared : ITesseraReadMode
+{
+    /// <inheritdoc/>
+    public static bool Check => false;
+
+    /// <inheritdoc/>
+    public static bool Share => true;
 }
 
 /// <summary>
@@ -97,7 +123,7 @@ public ref struct TesseraDeserializer
     // Strings are looked for among the recent ones from the RecentAfter-th on (buffers with a few strings need no table),
     // and after Probation strings missing from them, only if at least a third were there.
     private const int RecentAfter = 16;
-    private const int Probation = 512;
+    private const int Probation = 128;
     private const int LongString = 256;
 
     private TesseraDeserializer(ReadOnlySpan<byte> data, bool shared, TesseraReadOptions? check)
@@ -149,8 +175,11 @@ public ref struct TesseraDeserializer
         }
     }
 
-    /// <summary>Creates the object at <paramref name="root"/> of a buffer checked before (or trusted).</summary>
-    internal static T Run<T>(ReadOnlySpan<byte> data, int root, bool shared, TesseraDeserializeFunc<T> read)
+    /// <summary>
+    /// Creates the object at <paramref name="root"/> of a buffer checked before (or trusted), with <paramref name="read"/>,
+    /// or, when the buffer shares items heavily, with <paramref name="readShared"/>.
+    /// </summary>
+    internal static T Run<T>(ReadOnlySpan<byte> data, int root, bool shared, TesseraDeserializeFunc<T> read, TesseraDeserializeFunc<T> readShared)
     {
         if (!shared)
         {
@@ -166,14 +195,7 @@ public ref struct TesseraDeserializer
         }
 
         var once = new TesseraDeserializer(data, shared: true, check: null);
-        return read(ref once, ref Unsafe.Add(ref MemoryMarshal.GetReference(data), root), 0);
-    }
-
-    /// <summary>Whether each stored object and list is created once and shared by its references.</summary>
-    public readonly bool Shared
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _shared;
+        return readShared(ref once, ref Unsafe.Add(ref MemoryMarshal.GetReference(data), root), 0);
     }
 
     /// <summary>Counts an object or list about to be created, without checks.</summary>
@@ -187,17 +209,17 @@ public ref struct TesseraDeserializer
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void TooMany() => throw new TooManyCopies();
 
-    /// <summary>While <see cref="Shared"/>: the item of type <paramref name="type"/> already created from <paramref name="item"/>, or null.</summary>
+    /// <summary>When items are shared: the item of type <paramref name="type"/> already created from <paramref name="item"/>, or null.</summary>
     public readonly object? Find(ref byte item, int type) => _items != null && _items.TryGetValue(Key(ref item, type), out object? value) ? value : null;
 
-    /// <summary>While <see cref="Shared"/>: records the item of type <paramref name="type"/> created from <paramref name="item"/>.</summary>
+    /// <summary>When items are shared: records the item of type <paramref name="type"/> created from <paramref name="item"/>.</summary>
     public void Remember(ref byte item, int type, object value) => (_items ??= new Dictionary<long, object>())[Key(ref item, type)] = value;
 
-    /// <summary>Returns <paramref name="value"/>, created from <paramref name="item"/>; while <see cref="Shared"/>, records it first.</summary>
+    /// <summary>Returns <paramref name="value"/>, created from <paramref name="item"/>; when items are shared, records it first.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public T Keep<T>(ref byte item, int type, T value) where T : class
+    public T Keep<TC, T>(ref byte item, int type, T value) where TC : struct, ITesseraReadMode where T : class
     {
-        if (_shared) Remember(ref item, type, value);
+        if (TC.Share) Remember(ref item, type, value);
         return value;
     }
 
@@ -240,19 +262,19 @@ public ref struct TesseraDeserializer
     /// points into the buffer.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly ref byte Target<TC>(ref byte slot) where TC : struct, ITesseraChecks
+    public readonly ref byte Target<TC>(ref byte slot) where TC : struct, ITesseraReadMode
     {
         uint off = Unsafe.ReadUnaligned<uint>(ref slot);
-        if (TC.On && (off == 0 || (off & 3u) != 0 || At(ref slot) + off >= _length)) Fail();
+        if (TC.Check && (off == 0 || (off & 3u) != 0 || At(ref slot) + off >= _length)) Fail();
         return ref Unsafe.Add(ref slot, (nint)off);
     }
 
     /// <summary>The struct that the offset at <paramref name="slot"/> points to, <paramref name="size"/> bytes; checked as such.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly ref byte SharedStruct<TC>(ref byte slot, int size) where TC : struct, ITesseraChecks
+    public readonly ref byte SharedStruct<TC>(ref byte slot, int size) where TC : struct, ITesseraReadMode
     {
         ref byte target = ref Target<TC>(ref slot);
-        if (TC.On) Range(ref target, size);
+        if (TC.Check) Range(ref target, size);
         return ref target;
     }
 
@@ -297,7 +319,7 @@ public ref struct TesseraDeserializer
     /// The string at <paramref name="s"/> (its length, then its UTF-8 bytes), decoded; checked, it is in the buffer,
     /// followed by a zero byte, and valid UTF-8 if the options ask.
     /// </summary>
-    public string String<TC>(ref byte s) where TC : struct, ITesseraChecks
+    public string String<TC>(ref byte s) where TC : struct, ITesseraReadMode
     {
         Recent[]? recent = _recent;
         if (recent == null)
@@ -326,9 +348,9 @@ public ref struct TesseraDeserializer
         return text;
     }
 
-    private string Read<TC>(ref byte s) where TC : struct, ITesseraChecks
+    private string Read<TC>(ref byte s) where TC : struct, ITesseraReadMode
     {
-        if (TC.On) Check(ref s);
+        if (TC.Check) Check(ref s);
         int n = (int)Unsafe.ReadUnaligned<uint>(ref s);
         if (n > _utf8Left) return Cached(ref s, n);
         _utf8Left -= n;
@@ -352,15 +374,8 @@ public ref struct TesseraDeserializer
         if (!Utf8.IsValid(MemoryMarshal.CreateReadOnlySpan(ref Unsafe.Add(ref s, 4), (int)n))) Fail();
     }
 
-    /// <summary>UTF-8 decoded; ASCII, the most common, widened directly into the new string.</summary>
-    private static unsafe string Decode(ReadOnlySpan<byte> utf8)
-    {
-        if (!Ascii.IsValid(utf8)) return Encoding.UTF8.GetString(utf8);
-        fixed (byte* p = utf8)
-        {
-            return string.Create(utf8.Length, (nint)p, static (chars, bytes) => Ascii.ToUtf16(new ReadOnlySpan<byte>((void*)bytes, chars.Length), chars, out _));
-        }
-    }
+    /// <summary>UTF-8 decoded; ASCII, the most common, is Latin-1 too, whose decoder only widens the bytes.</summary>
+    private static string Decode(ReadOnlySpan<byte> utf8) => Ascii.IsValid(utf8) ? Encoding.Latin1.GetString(utf8) : Encoding.UTF8.GetString(utf8);
 
     private string Cached(ref byte s, int n)
     {

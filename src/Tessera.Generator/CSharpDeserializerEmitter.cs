@@ -78,7 +78,7 @@ namespace Tessera.Generator
             foreach (var o in objects)
             {
                 _w.Line($"TesseraModel<{o.CsName}>.RegisterRead(TesseraSchema.T{o.Index}, TesseraVerifiers.O{o.Index}, " +
-                        $"TesseraDeserializers.O{o.Index}<TesseraChecked>, TesseraDeserializers.O{o.Index}<TesseraUnchecked>);");
+                        $"TesseraDeserializers.O{o.Index}<TesseraChecked>, TesseraDeserializers.O{o.Index}<TesseraUnchecked>, TesseraDeserializers.O{o.Index}<TesseraShared>);");
             }
 
             _w.Close();
@@ -94,8 +94,8 @@ namespace Tessera.Generator
             string type = o.CsName;
             var symbol = o.Symbol;
             _w.Line();
-            _w.Open($"public static {type} O{o.Index}<TC>(ref TesseraDeserializer d, ref byte p, int depth) where TC : struct, ITesseraChecks");
-            if (!o.IsValueType) _w.Line($"if (d.Shared && d.Find(ref p, {o.Index}) is {type} found) return found;");
+            _w.Open($"public static {type} O{o.Index}<TC>(ref TesseraDeserializer d, ref byte p, int depth) where TC : struct, ITesseraReadMode");
+            if (!o.IsValueType) _w.Line($"if (TC.Share && d.Find(ref p, {o.Index}) is {type} found) return found;");
             // An object's first 4 bytes are in the buffer when its offset passed the check (TesseraDeserializer.TryChecked).
             int start = 4 * o.HeaderWords + o.FixedSize;
             if (start == 4) Checked("d.Enter(depth);");
@@ -194,7 +194,7 @@ namespace Tessera.Generator
             }
 
             foreach (var s in statements) _w.Line(s);
-            _w.Line(o.IsValueType ? "return v;" : $"return d.Keep(ref p, {o.Index}, v);");
+            _w.Line(o.IsValueType ? "return v;" : $"return d.Keep<TC, {type}>(ref p, {o.Index}, v);");
             _w.Close();
         }
 
@@ -336,13 +336,16 @@ namespace Tessera.Generator
 
         // ------------------------------------------------------------------ checks
 
-        /// <summary>Statements that run only in the checking version; the other version counts the item instead.</summary>
+        /// <summary>
+        /// Statements that run only in the checking version; the unchecked one counts the item instead (to share the items
+        /// of a buffer that holds far fewer than the references to them).
+        /// </summary>
         private void Checked(params string[] statements)
         {
-            _w.Open("if (TC.On)");
+            _w.Open("if (TC.Check)");
             foreach (var line in statements) _w.Line(line);
             _w.Close();
-            _w.Open("else");
+            _w.Open("else if (!TC.Share)");
             _w.Line("d.Count();");
             _w.Close();
             _w.Line();
@@ -372,7 +375,7 @@ namespace Tessera.Generator
             }
 
             if (bad.Count == 0 && o.Cells.Count == 0) return;
-            _w.Open("if (TC.On)");
+            _w.Open("if (TC.Check)");
             if (bad.Count > 0) _w.Line($"if ({string.Join(" || ", bad)}) TesseraDeserializer.Fail();");
             if (o.Cells.Count > 0) _w.Line($"d.Range(ref p, {CellsBefore(o, int.MaxValue)});");
             _w.Close();
@@ -413,17 +416,17 @@ namespace Tessera.Generator
         private void EmitUnion(UnionModel u)
         {
             _w.Line();
-            _w.Open($"public static {u.CsName} U{u.Index}<TC>(ref TesseraDeserializer d, ref byte cell, int depth) where TC : struct, ITesseraChecks");
+            _w.Open($"public static {u.CsName} U{u.Index}<TC>(ref TesseraDeserializer d, ref byte cell, int depth) where TC : struct, ITesseraReadMode");
             _w.Line("ref byte slot = ref Unsafe.Add(ref cell, 4);");
             _w.Open("if (Unsafe.ReadUnaligned<uint>(ref slot) == 0)");
-            _w.Line("if (TC.On) TesseraDeserializer.Fail();   // a stored value needs its offset");
+            _w.Line("if (TC.Check) TesseraDeserializer.Fail();   // a stored value needs its offset");
             _w.Line("return default;");
             _w.Close();
             _w.Line();
             _w.Open("switch (Unsafe.ReadUnaligned<uint>(ref cell))");
             foreach (var m in u.Members.OrderBy(m => m.Tag)) _w.Line($"case 0x{m.Tag:X8}u: return O{m.Type.Index}<TC>(ref d, ref d.Target<TC>(ref slot), depth);");
             _w.Line("default:");
-            _w.Line("    if (TC.On) TesseraDeserializer.Fail();");
+            _w.Line("    if (TC.Check) TesseraDeserializer.Fail();");
             _w.Line("    return default;   // unchecked: a type this program does not know (written by another version of the classes)");
             _w.Close();
             _w.Close();
@@ -455,8 +458,8 @@ namespace Tessera.Generator
         {
             string type = Cs(c.Type);
             _w.Line();
-            _w.Open($"public static {type} {c.Name}<TC>(ref TesseraDeserializer d, ref byte v, int depth) where TC : struct, ITesseraChecks");
-            _w.Line($"if (d.Shared && d.Find(ref v, {c.Id}) is {type} found) return found;");
+            _w.Open($"public static {type} {c.Name}<TC>(ref TesseraDeserializer d, ref byte v, int depth) where TC : struct, ITesseraReadMode");
+            _w.Line($"if (TC.Share && d.Find(ref v, {c.Id}) is {type} found) return found;");
             if (c.Wire is VectorModel vm)
             {
                 Checked("d.Enter(depth);");   // its count is in the buffer when its offset passed the check
@@ -481,7 +484,7 @@ namespace Tessera.Generator
 
 
             _w.Line("uint count = Unsafe.ReadUnaligned<uint>(ref v);");
-            _w.Open("if (TC.On)");
+            _w.Open("if (TC.Check)");
             CheckItems(e, "v", "count");
             _w.Close();
             _w.Line();
@@ -494,7 +497,7 @@ namespace Tessera.Generator
             {
                 if (block)
                 {
-                    string copy = $"return d.Keep(ref v, {c.Id}, TesseraReader.Span<{E}>(ref v).ToArray());";
+                    string copy = $"return d.Keep<TC, {type}>(ref v, {c.Id}, TesseraReader.Span<{E}>(ref v).ToArray());";
                     if (guard == null)
                     {
                         _w.Line(copy);
@@ -506,7 +509,7 @@ namespace Tessera.Generator
 
                 _w.Line($"var a = new {NewArray(E, "n")};");
                 Items(e, et, "v", "a.Length", "depth + 1", x => $"a[i] = {x};");
-                _w.Line($"return d.Keep(ref v, {c.Id}, a);");
+                _w.Line($"return d.Keep<TC, {type}>(ref v, {c.Id}, a);");
                 return;
             }
 
@@ -536,20 +539,20 @@ namespace Tessera.Generator
 
                 if (shape == Shape.List)
                 {
-                    _w.Line($"return d.Keep(ref v, {c.Id}, list);");
+                    _w.Line($"return d.Keep<TC, {type}>(ref v, {c.Id}, list);");
                     return;
                 }
 
                 // A stack enumerates from its top, so it was stored top first: pushed back in the opposite order.
                 string def = c.Type.OriginalDefinition.ToDisplayString();
                 if (def == "System.Collections.Generic.Stack<T>" || def == "System.Collections.Concurrent.ConcurrentStack<T>") _w.Line("list.Reverse();");
-                _w.Line($"return d.Keep(ref v, {c.Id}, new {type}(list));");
+                _w.Line($"return d.Keep<TC, {type}>(ref v, {c.Id}, new {type}(list));");
                 return;
             }
 
             _w.Line($"var c = new {type}();");
             Items(e, et, "v", "n", "depth + 1", x => $"{add}({x});");
-            _w.Line($"return d.Keep(ref v, {c.Id}, c);");
+            _w.Line($"return d.Keep<TC, {type}>(ref v, {c.Id}, c);");
         }
 
         private void EmitDictionary(Made c, ObjectModel map)
@@ -595,7 +598,7 @@ namespace Tessera.Generator
             Checked("d.Enter(depth);", "d.Range(ref v, 12);", $"if (Unsafe.ReadUnaligned<uint>(ref v) != 0x{both:X}u) TesseraDeserializer.Fail();");
             _w.Line($"ref byte keys = ref d.Target<TC>(ref Unsafe.Add(ref v, {keysAt}));");
             _w.Line($"ref byte values = ref d.Target<TC>(ref Unsafe.Add(ref v, {valuesAt}));");
-            _w.Open("if (TC.On)");
+            _w.Open("if (TC.Check)");
             foreach (var (list, element) in new[] { ("keys", map.Map!.Key), ("values", map.Map.Value) })
             {
                 _w.Line("d.Enter(depth + 1);");
@@ -618,7 +621,7 @@ namespace Tessera.Generator
                     "if (Unsafe.ReadUnaligned<uint>(ref ks) == 0) continue;",
                     "string k = d.String<TC>(ref d.Target<TC>(ref ks));",
                 } : null);
-            _w.Line(wrap ? $"return d.Keep(ref v, {c.Id}, new {type}(c));" : $"return d.Keep(ref v, {c.Id}, c);");
+            _w.Line(wrap ? $"return d.Keep<TC, {type}>(ref v, {c.Id}, new {type}(c));" : $"return d.Keep<TC, {type}>(ref v, {c.Id}, c);");
         }
 
         private static string KeyRead(ValueModel key, string K)

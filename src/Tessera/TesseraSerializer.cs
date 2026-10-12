@@ -26,6 +26,9 @@ public static class TesseraModel<T>
     /// <summary>Generated code that checks a buffer while it creates a <typeparamref name="T"/> from it.</summary>
     public static TesseraDeserializeFunc<T>? ReadChecked { get; private set; }
 
+    /// <summary>Generated code that creates a <typeparamref name="T"/> from a buffer checked before, each stored item once.</summary>
+    public static TesseraDeserializeFunc<T>? ReadShared { get; private set; }
+
     /// <summary>Called by generated module initializers.</summary>
     public static void Register(TesseraWriteFunc<T> write, TesseraType type)
     {
@@ -35,12 +38,14 @@ public static class TesseraModel<T>
     }
 
     /// <summary>Called by generated module initializers.</summary>
-    public static void RegisterRead(TesseraType type, TesseraVerifyFunc verify, TesseraDeserializeFunc<T> readChecked, TesseraDeserializeFunc<T> read)
+    public static void RegisterRead(TesseraType type, TesseraVerifyFunc verify, TesseraDeserializeFunc<T> readChecked, TesseraDeserializeFunc<T> read,
+        TesseraDeserializeFunc<T> readShared)
     {
         Type ??= type;
         Verify = verify;
         ReadChecked = readChecked;
         Read = read;
+        ReadShared = readShared;
     }
 }
 
@@ -80,7 +85,7 @@ public static class TesseraSerializer
     }
 
     /// <summary>
-    /// Creates the <typeparamref name="T"/> that <paramref name="buffer"/> holds, after checking the buffer (unless
+    /// Creates the <typeparamref name="T"/> that <paramref name="buffer"/> holds, checking the buffer as it reads it (unless
     /// <see cref="TesseraReadOptions.Verify"/> is off). A buffer written with other versions of the classes is read by
     /// matching members by name. To read a buffer without creating objects, use the generated read type
     /// (<c>MonsterView.Read(buffer)</c> for a class <c>Monster</c>).
@@ -128,7 +133,7 @@ public static class TesseraSerializer
             }
         }
 
-        value = TesseraDeserializer.Run(data, root, shared, read);
+        value = TesseraDeserializer.Run(data, root, shared, read, TesseraModel<T>.ReadShared!);
         return true;
     }
 
