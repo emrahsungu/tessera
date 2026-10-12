@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -7,12 +8,22 @@ namespace Tessera;
 
 public sealed partial class TesseraWriter
 {
-    private readonly Dictionary<string, int> _strings = new();
-    private (string Value, int Pos)[] _pendingStrings = Array.Empty<(string, int)>();  // written, not yet in _strings
+    // Strings written so far, by content: open addressing with linear probing, at most half full; a slot is free when
+    // its Value is null. Faster than a Dictionary<string, int> for this one job (find, or add after writing).
+    private StringSlot[] _stringSlots = new StringSlot[64];
+    private int _stringCount;
+    private (string Value, int Pos)[] _pendingStrings = Array.Empty<(string, int)>();  // written, not yet in the table
     private int _pendingCount;
     private Entry[] _entries = new Entry[256];
     private int _entryCount;
     private int[] _slots = new int[512];
+
+    private struct StringSlot
+    {
+        public string? Value;
+        public int Pos;
+        public int Hash;
+    }
 
     private struct Entry
     {
@@ -25,7 +36,16 @@ public sealed partial class TesseraWriter
 
     private void ResetSharing()
     {
-        _strings.Clear();
+        if (_stringCount != 0)
+        {
+            // Clearing costs the table's size: a table grown by an earlier, larger buffer is replaced by a smaller one.
+            if (_stringSlots.Length > 1024 && _stringCount < _stringSlots.Length / 8)
+                _stringSlots = new StringSlot[Math.Max(64, (int)BitOperations.RoundUpToPowerOf2((uint)_stringCount * 4))];
+            else
+                Array.Clear(_stringSlots);
+            _stringCount = 0;
+        }
+
         if (_pendingCount != 0)
         {
             Array.Clear(_pendingStrings, 0, _pendingCount);
@@ -36,6 +56,79 @@ public sealed partial class TesseraWriter
             Array.Clear(_slots);
             _entryCount = 0;
         }
+    }
+
+    /// <summary>
+    /// The position of a string equal to <paramref name="value"/> written before, or 0 (no item is at 0); either way
+    /// <paramref name="slot"/> is where it is, or where to add it.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int FindString(string value, int hash, out int slot)
+    {
+        StringSlot[] slots = _stringSlots;
+        int mask = slots.Length - 1;
+        ref StringSlot first = ref MemoryMarshal.GetArrayDataReference(slots);
+        for (int i = hash & mask; ; i = (i + 1) & mask)
+        {
+            ref StringSlot s = ref Unsafe.Add(ref first, i);
+            string? known = s.Value;
+            if (known is null || (s.Hash == hash && string.Equals(known, value)))
+            {
+                slot = i;
+                return known is null ? 0 : s.Pos;
+            }
+        }
+    }
+
+    /// <summary>Adds a string at the free slot <see cref="FindString"/> returned (the table must not have changed since).</summary>
+    private void AddString(int slot, string value, int hash, int pos)
+    {
+        _stringSlots[slot] = new StringSlot { Value = value, Pos = pos, Hash = hash };
+        if (++_stringCount * 2 > _stringSlots.Length) GrowStrings();
+    }
+
+    private void GrowStrings()
+    {
+        var slots = new StringSlot[_stringSlots.Length * 2];
+        int mask = slots.Length - 1;
+        foreach (StringSlot s in _stringSlots)
+        {
+            if (s.Value is null) continue;
+            int i = s.Hash & mask;
+            while (slots[i].Value is not null) i = (i + 1) & mask;
+            slots[i] = s;
+        }
+
+        _stringSlots = slots;
+    }
+
+    // Seeded per process: equal strings still find each other, and the table's layout (never the buffer) cannot be
+    // predicted, so chosen strings cannot pile up in one place.
+    private static readonly ulong s_stringSeed = (ulong)Random.Shared.NextInt64();
+
+    /// <summary>A hash of the string's UTF-16 code units, 8 bytes at a time.</summary>
+    private static int HashString(string value)
+    {
+        const ulong k1 = 0xE7037ED1A0B428DBUL;
+        ref byte p = ref Unsafe.As<char, byte>(ref MemoryMarshal.GetReference(value.AsSpan()));
+        int n = value.Length * 2;
+        ulong h = s_stringSeed ^ (ulong)n;
+        if (n >= 8)
+        {
+            // Every 8 bytes, the last 8 overlapping the ones before when the length is not a multiple of 8.
+            for (int i = 0; i < n - 8; i += 8) h = Mix(h ^ Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref p, i)), k1);
+            h = Mix(h ^ Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref p, n - 8)), k1);
+        }
+        else if (n >= 4)
+        {
+            h = Mix(h ^ Unsafe.ReadUnaligned<uint>(ref p) ^ (ulong)Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref p, n - 4)) << 32, k1);
+        }
+        else if (n != 0)
+        {
+            h = Mix(h ^ Unsafe.ReadUnaligned<ushort>(ref p), k1);
+        }
+
+        return (int)(h ^ (h >> 32));
     }
 
     // Items without inner offsets: equal bytes means equal value. Domain separates alignments.

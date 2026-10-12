@@ -178,11 +178,12 @@ public sealed partial class TesseraWriter
     {
         if (!_shareStrings) return WriteStringBytes(value);
         if (_pendingCount != 0) AddPendingStrings();
-        // One lookup: the entry is added here and set once the string is written. (A write that throws abandons the
-        // buffer, and the next one starts with Reset.)
-        ref int known = ref CollectionsMarshal.GetValueRefOrAddDefault(_strings, value, out bool exists);
-        if (exists) return known;
-        return known = WriteStringBytes(value);
+        int hash = HashString(value);
+        int known = FindString(value, hash, out int slot);
+        if (known != 0) return known;
+        int pos = WriteStringBytes(value);
+        AddString(slot, value, hash, pos);
+        return pos;
     }
 
     /// <summary>
@@ -213,7 +214,7 @@ public sealed partial class TesseraWriter
     {
         Enter();
         int slot = PushRefs(count);
-        bool lookup = _shareStrings && _strings.Count != 0;
+        bool lookup = _shareStrings && _stringCount != 0;
         if (_shareStrings && _pendingStrings.Length < count) _pendingStrings = new (string, int)[Math.Max(count, 2 * _pendingStrings.Length)];
         for (int i = count - 1; i >= 0; i--)
         {
@@ -229,13 +230,15 @@ public sealed partial class TesseraWriter
                 return false;
             }
 
-            int pos;
-            if (key is null) pos = 0;
-            else if (lookup && _strings.TryGetValue(key, out int known)) pos = known;
-            else
+            int pos = 0;
+            if (key is not null)
             {
-                pos = WriteStringBytes(key);
-                if (_shareStrings) _pendingStrings[_pendingCount++] = (key, pos);
+                if (lookup) pos = FindString(key, HashString(key), out _);
+                if (pos == 0)
+                {
+                    pos = WriteStringBytes(key);
+                    if (_shareStrings) _pendingStrings[_pendingCount++] = (key, pos);
+                }
             }
 
             SetRef(slot + i, pos);
@@ -248,7 +251,13 @@ public sealed partial class TesseraWriter
 
     private void AddPendingStrings()
     {
-        for (int i = 0; i < _pendingCount; i++) _strings.TryAdd(_pendingStrings[i].Value, _pendingStrings[i].Pos);
+        for (int i = 0; i < _pendingCount; i++)
+        {
+            (string value, int pos) = _pendingStrings[i];
+            int hash = HashString(value);
+            if (FindString(value, hash, out int slot) == 0) AddString(slot, value, hash, pos);
+        }
+
         Array.Clear(_pendingStrings, 0, _pendingCount);
         _pendingCount = 0;
     }
