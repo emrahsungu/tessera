@@ -318,6 +318,42 @@ public class ReaderTests
         }
     }
 
+    /// <summary>
+    /// Buffers of these classes are checked by generated code, buffers of other versions against the schema they carry:
+    /// both accept the same damaged buffers. Another fingerprint sends a buffer to the second check with the same schema,
+    /// so the same layout.
+    /// </summary>
+    [Fact]
+    public void GeneratedChecksMatchTheSchemaChecks()
+    {
+        var random = new Random(4242);
+        var shareAll = new TesseraOptions { Sharing = Sharing.All };
+        var cases = new (byte[] Good, Func<byte[], bool> Read)[]
+        {
+            (TesseraSerializer.Serialize(Samples.Full()), b => MonsterView.TryRead(b, out _, out _)),
+            (TesseraSerializer.Serialize(Samples.Full(), shareAll), b => MonsterView.TryRead(b, out _, out _)),
+            (TesseraSerializer.Serialize(Samples.Dag(12), shareAll), b => NodeView.TryRead(b, out _, out _)),   // checked once per item
+            (TesseraSerializer.Serialize(Samples.DagTwice(deepFirst: false), shareAll), b => NodeView.TryRead(b, out _, out _)),
+        };
+        foreach (var (good, read) in cases)
+        {
+            byte[] other = (byte[])good.Clone();
+            other[8] ^= 1;
+            Assert.True(read(good));
+            Assert.True(read(other));
+            int data = 16 + BitConverter.ToInt32(good, 16);   // past the schema section, which only the second check reads
+            for (int round = 0; round < 2000; round++)
+            {
+                byte[] bad = (byte[])good.Clone();
+                int flips = 1 + random.Next(3);
+                for (int i = 0; i < flips; i++) bad[data + random.Next(bad.Length - data)] ^= (byte)(1 << random.Next(8));
+                bad.CopyTo(other, 0);
+                other[8] ^= 1;
+                Assert.Equal(read(bad), read(other));
+            }
+        }
+    }
+
     /// <summary>Touches every member, recursively, as a program reading the buffer would.</summary>
     private static void ReadEverything(MonsterView v)
     {

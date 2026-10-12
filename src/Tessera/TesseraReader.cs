@@ -30,25 +30,36 @@ public static class TesseraReader
     /// <summary>
     /// Checks <paramref name="buffer"/> (unless <see cref="TesseraReadOptions.Verify"/> is off) and returns a reference to
     /// its top-level object, which is of type <paramref name="root"/>; on failure, <see cref="Zeros"/> and the reason in
-    /// <paramref name="error"/>. Called by the generated read types.
+    /// <paramref name="error"/>. A buffer written with these classes is checked by <paramref name="verify"/>, the generated
+    /// check of <paramref name="root"/>. Called by the generated read types.
     /// </summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
-    public static ref readonly byte Open(ReadOnlySpan<byte> buffer, TesseraType root, TesseraReadOptions? options, out TesseraReadError error)
+    public static ref readonly byte Open(ReadOnlySpan<byte> buffer, TesseraType root, TesseraVerifyFunc verify, TesseraReadOptions? options,
+        out TesseraReadError error)
     {
         options ??= TesseraReadOptions.Default;
         error = CheckHeader(buffer, out int rootAt);
         if (error != TesseraReadError.None) return ref Zeros;
-        ReadSchema reader = root.ReadSchema ??= ReadSchema.FromTypes(root);
         if (BinaryPrimitives.ReadUInt64LittleEndian(buffer.Slice(8)) == root.DeepFingerprint)
         {
             if (options.Verify)
             {
-                error = Verifier.Check(buffer, reader, rootAt, options);
+                error = TesseraVerifier.Check(buffer, rootAt, options, verify);
                 if (error != TesseraReadError.None) return ref Zeros;
             }
 
             return ref Unsafe.Add(ref MemoryMarshal.GetReference(buffer), rootAt);
         }
+
+        return ref OpenOther(buffer, root, rootAt, options, out error);
+    }
+
+    /// <summary>A buffer written with other versions of the classes.</summary>
+    private static ref readonly byte OpenOther(ReadOnlySpan<byte> buffer, TesseraType root, int rootAt, TesseraReadOptions options,
+        out TesseraReadError error)
+    {
+        error = TesseraReadError.None;
+        ReadSchema reader = root.ReadSchema ??= ReadSchema.FromTypes(root);
 
         // Written with other versions of the classes: matched member by member, by name, through the schema section the
         // buffer carries, checked against that schema, and translated once into this program's layout.
@@ -73,7 +84,7 @@ public static class TesseraReader
 
         if (options.Verify)
         {
-            error = Verifier.Check(buffer, writer, rootAt, options);
+            error = TesseraVerifier.Check(buffer, writer, rootAt, options);
             if (error != TesseraReadError.None) return ref Zeros;
         }
 

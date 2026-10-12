@@ -100,6 +100,7 @@ namespace Tessera.Generator
             foreach (var s in _types.OfType<StructModel>()) EmitStructReader(s);
             foreach (var a in _accessors) _w.Line(a);
             _w.Close();
+            EmitVerifiers();
             _w.Close();
             return _w.ToString();
         }
@@ -377,14 +378,14 @@ namespace Tessera.Generator
             _w.Line("/// </summary>");
             _w.Line("/// <exception cref=\"TesseraReadException\">The buffer cannot be read; its <c>Error</c> says why.</exception>");
             _w.Open($"public static {name} Read(global::System.ReadOnlySpan<byte> buffer, TesseraReadOptions? options = null)");
-            _w.Line($"ref readonly byte root = ref TesseraReader.Open(buffer, global::{_ns}.TesseraSchema.T{o.Index}, options, out TesseraReadError error);");
+            _w.Line($"ref readonly byte root = ref TesseraReader.Open(buffer, global::{_ns}.TesseraSchema.T{o.Index}, global::{_ns}.TesseraVerifiers.O{o.Index}, options, out TesseraReadError error);");
             _w.Line("if (error != TesseraReadError.None) throw new TesseraReadException(error);");
             _w.Line($"return new {name}(ref Unsafe.AsRef(in root));");
             _w.Close();
             _w.Line();
             _w.Line($"/// <summary>Like <see cref=\"Read\"/>, but returns false and the reason instead of throwing.</summary>");
             _w.Open($"public static bool TryRead(global::System.ReadOnlySpan<byte> buffer, out {name} value, out TesseraReadError error, TesseraReadOptions? options = null)");
-            _w.Line($"ref readonly byte root = ref TesseraReader.Open(buffer, global::{_ns}.TesseraSchema.T{o.Index}, options, out error);");
+            _w.Line($"ref readonly byte root = ref TesseraReader.Open(buffer, global::{_ns}.TesseraSchema.T{o.Index}, global::{_ns}.TesseraVerifiers.O{o.Index}, options, out error);");
             _w.Line($"value = new {name}(ref Unsafe.AsRef(in root));");
             _w.Line("return error == TesseraReadError.None;");
             _w.Close();
@@ -930,6 +931,206 @@ namespace Tessera.Generator
             _w.Line("/// <summary>The value of <paramref name=\"key\"/>.</summary>");
             _w.Line("/// <exception cref=\"global::System.Collections.Generic.KeyNotFoundException\">The dictionary does not have the key.</exception>");
             _w.Line($"public {valueType} this[{keyType} key] => TryGetValue(key, out var value) ? value : throw new global::System.Collections.Generic.KeyNotFoundException();");
+            _w.Close();
+        }
+
+        // ------------------------------------------------------------------ checks
+
+        /// <summary>
+        /// The checks of buffers written with these classes: one method per object, list and abstract-class type, with the
+        /// header masks and cell positions as constants. Buffers written with other versions are checked against the schema
+        /// they carry instead.
+        /// </summary>
+        private void EmitVerifiers()
+        {
+            _w.Line();
+            _w.Line("/// <summary>Checks buffers written with these classes before they are read (for generated code).</summary>");
+            _w.Line("[global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]");
+            _w.Open("internal static class TesseraVerifiers");
+            foreach (var t in _types)
+            {
+                switch (t)
+                {
+                    case ObjectModel o: EmitObjectVerifier(o); break;
+                    case VectorModel v: EmitVectorVerifier(v); break;
+                    case UnionModel u: EmitUnionVerifier(u); break;
+                }
+            }
+
+            _w.Close();
+        }
+
+        /// <summary>
+        /// An object: its header words in the buffer, no bit set that the type does not use, no bool's value bit without its
+        /// present bit, its cells in the buffer, and each offset it holds checked with what it points to.
+        /// </summary>
+        private void EmitObjectVerifier(ObjectModel o)
+        {
+            int words = o.HeaderWords;
+            var used = new uint[words];
+            var boolPresent = new uint[words];
+            foreach (var c in o.Cells) used[c.Bit / 32] |= 1u << (c.Bit % 32);
+            foreach (var b in o.Bools)
+            {
+                used[b.Bit / 32] |= 3u << (b.Bit % 32);
+                boolPresent[b.Bit / 32] |= 1u << (b.Bit % 32);
+            }
+
+            // A dictionary stores both of its lists (its only cells): their positions are constants.
+            bool all = o.Map != null;
+            int start = 4 * words + o.FixedSize;
+            _w.Line();
+            if (o.Cells.All(c => !WireFormat.IsReference(c.Value.Kind))) _w.Line("[MethodImpl(MethodImplOptions.AggressiveInlining)]");
+            _w.Open($"public static bool O{o.Index}(ref TesseraVerifier v, int p, int depth)");
+            _w.Line($"if (v.IsOnce && !v.TakeOwn()) return v.Once(p, {o.Index + 2}, depth, O{o.Index});");
+            _w.Line($"if (!v.Enter(depth) || !v.Range(p, {(all ? start + o.Cells.Sum(c => c.CellSize) : start)})) return false;");
+            for (int w = 0; w < words; w++) _w.Line($"uint h{w} = v.U32({(w == 0 ? "p" : $"p + {4 * w}")});");
+            var bad = new List<string>();
+            for (int w = 0; w < words; w++)
+            {
+                if (~used[w] != 0) bad.Add($"(h{w} & 0x{~used[w]:X}u) != 0");
+                if (boolPresent[w] != 0) bad.Add($"((h{w} >> 1) & ~h{w} & 0x{boolPresent[w]:X}u) != 0");
+            }
+
+            if (bad.Count > 0) _w.Line($"if ({string.Join(" || ", bad)}) return v.Fail(TesseraReadError.ReservedBits);");
+            if (all)
+            {
+                // Readers find a dictionary's lists without the presence bits.
+                uint both = o.Cells.Aggregate(0u, (m, c) => m | 1u << c.Bit);
+                _w.Line($"if ((h0 & 0x{both:X}u) != 0x{both:X}u) return v.Fail(TesseraReadError.BadOffset);");
+            }
+            else if (o.Cells.Count > 0)
+            {
+                _w.Line($"if (!v.Range(p, {CellsAt(o, int.MaxValue, start)})) return false;");
+            }
+
+            foreach (var m in o.Cells)
+            {
+                var kind = m.Value.Kind;
+                if (!WireFormat.IsReference(kind)) continue;
+                if (all)
+                {
+                    // Both lists: no presence test, so one scope for both.
+                    string x = "x" + m.Bit.ToString(CultureInfo.InvariantCulture);
+                    int at = start + o.Cells.Where(c => c.Bit < m.Bit).Sum(c => c.CellSize);
+                    _w.Line($"if (!v.Follow(p + {at}, out int {x}) || !{TargetCheck(m.Value, x)}) return false;");
+                    continue;
+                }
+
+                _w.Open($"if ((h{m.Bit / 32} & 0x{1u << (m.Bit % 32):X}u) != 0)");
+                string cell = $"p + {CellsAt(o, m.Bit, start)}";
+                if (kind == WireKind.Union)
+                {
+                    _w.Line($"int c = {cell};");
+                    _w.Line($"if (!v.Follow(c + 4, out int x) || !U{m.Value.Union!.Index}(ref v, v.U32(c), x, depth + 1)) return false;");
+                }
+                else
+                {
+                    _w.Line($"if (!v.Follow({cell}, out int x) || !{TargetCheck(m.Value, "x")}) return false;");
+                }
+
+                _w.Close();
+            }
+
+            _w.Line("return true;");
+            _w.Close();
+        }
+
+        /// <summary>
+        /// The bytes from an object's start to cell <paramref name="bit"/> (past the last cell for a larger bit):
+        /// <paramref name="start"/>, then the present cells before it, one population count per cell size and header word.
+        /// </summary>
+        private static string CellsAt(ObjectModel o, int bit, int start)
+        {
+            var terms = new List<string> { start.ToString(CultureInfo.InvariantCulture) };
+            foreach (var g in o.Cells.Where(c => c.Bit < bit).GroupBy(c => c.CellSize).OrderBy(g => g.Key))
+            {
+                var masks = new uint[o.HeaderWords];
+                foreach (var c in g) masks[c.Bit / 32] |= 1u << (c.Bit % 32);
+                for (int w = 0; w < masks.Length; w++)
+                {
+                    if (masks[w] == 0) continue;
+                    string count = $"global::System.Numerics.BitOperations.PopCount(h{w} & 0x{masks[w]:X}u)";
+                    terms.Add(g.Key == 1 ? count : $"{g.Key} * {count}");
+                }
+            }
+
+            return string.Join(" + ", terms);
+        }
+
+        /// <summary>The check of the value a cell or list item points to, at <paramref name="x"/>, one level down.</summary>
+        private static string TargetCheck(ValueModel e, string x)
+        {
+            switch (e.Kind)
+            {
+                case WireKind.String: return $"v.String({x})";
+                case WireKind.Object: return $"O{e.Object!.Index}(ref v, {x}, depth + 1)";
+                case WireKind.Vector: return $"V{e.Vector!.Index}(ref v, {x}, depth + 1)";
+                case WireKind.SharedStruct: return $"v.Range({x}, {e.Struct!.Size})";
+                default: throw new InvalidOperationException("not a reference: " + e.Kind);
+            }
+        }
+
+        /// <summary>
+        /// A list: its count and items in the buffer; bools 0 or 1; 8-byte numbers at a multiple of 8; each offset checked
+        /// with what it points to.
+        /// </summary>
+        private void EmitVectorVerifier(VectorModel vm)
+        {
+            var e = vm.Element;
+            int size = e.Kind == WireKind.Struct ? e.Struct!.Size : e.Kind == WireKind.Bool ? 1 : WireFormat.CellSize(e.Kind);
+            bool align8 = size >= 8 && e.Kind != WireKind.Struct && e.Kind != WireKind.Union;
+            _w.Line();
+            if (!WireFormat.IsReference(e.Kind)) _w.Line("[MethodImpl(MethodImplOptions.AggressiveInlining)]");
+            _w.Open($"public static bool V{vm.Index}(ref TesseraVerifier v, int t, int depth)");
+            _w.Line($"if (v.IsOnce && !v.TakeOwn()) return v.Once(t, {vm.Index + 2}, depth, V{vm.Index});");
+            _w.Line("if (!v.Enter(depth) || !v.Range(t, 4)) return false;");
+            _w.Line("uint n = v.U32(t);");
+            if (e.IsNullableValueType)
+            {
+                // Optional values: a presence bit per item, then every item's value.
+                _w.Line($"return v.OptionalValues(t, n, {size}, {(e.Kind == WireKind.Bool ? "true" : "false")}, {(align8 ? "true" : "false")});");
+            }
+            else if (!WireFormat.IsReference(e.Kind))
+            {
+                var checks = new List<string> { size == 1 ? "v.Range(t, 4L + n)" : $"v.Range(t, 4 + {size}L * n)" };
+                if (e.Kind == WireKind.Bool) checks.Add("v.Booleans(t + 4, n)");
+                if (align8) checks.Add("v.Aligned8(t + 4)");
+                _w.Line($"return {string.Join(" && ", checks)};");
+            }
+            else
+            {
+                int slot = e.Kind == WireKind.Union ? 8 : 4;
+                _w.Line($"if (!v.Range(t, 4 + {slot}L * n) || !v.References(n)) return false;");
+                _w.Open($"for (int i = 0, s = t + 4; i < (int)n; i++, s += {slot})");
+                if (e.Kind == WireKind.Union)
+                {
+                    _w.Line("if (v.U32(s + 4) == 0) continue;");
+                    _w.Line($"if (!v.Follow(s + 4, out int x) || !U{e.Union!.Index}(ref v, v.U32(s), x, depth + 1)) return false;");
+                }
+                else
+                {
+                    _w.Line("if (v.U32(s) == 0) continue;");
+                    _w.Line($"if (!v.Follow(s, out int x) || !{TargetCheck(e, "x")}) return false;");
+                }
+
+                _w.Close();
+                _w.Line();
+                _w.Line("return true;");
+            }
+
+            _w.Close();
+        }
+
+        /// <summary>A value of an abstract class or interface: the object its tag names.</summary>
+        private void EmitUnionVerifier(UnionModel u)
+        {
+            _w.Line();
+            _w.Open($"public static bool U{u.Index}(ref TesseraVerifier v, uint tag, int t, int depth)");
+            _w.Open("switch (tag)");
+            foreach (var m in u.Members.OrderBy(m => m.Tag)) _w.Line($"case 0x{m.Tag:X8}u: return O{m.Type.Index}(ref v, t, depth);");
+            _w.Line("default: return v.Fail(TesseraReadError.BadUnionTag);");
+            _w.Close();
             _w.Close();
         }
 
