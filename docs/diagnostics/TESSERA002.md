@@ -1,7 +1,7 @@
 # TESSERA002: Two fields would be saved under the same name
 
-**Error.** `Members 'Hp' and 'HitPoints' of 'Monster' have the same wire name or name hash; give one of them a
-different [TesseraName]`
+**Error.** `Fields 'Hp' and 'HitPoints' of 'Monster' would be saved under the same name (or names with the same hash);
+give one of them a different [TesseraName]`
 
 **What it means:** two fields of one class would be saved under the same name. Saved data identifies each field by a
 64-bit hash of its name: the C# name, or the one given with [`[TesseraName]`](../attributes/tessera-name.md). This

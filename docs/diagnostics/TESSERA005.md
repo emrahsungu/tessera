@@ -1,6 +1,6 @@
 # TESSERA005: Too many fields in one class
 
-**Error.** `'Settings' has 5000 serialized members; the limit is 4096`
+**Error.** `'Settings' has 5000 saved fields and properties; the limit is 4096`
 
 **What it means:** a class can have at most 4,096 saved fields and properties.
 

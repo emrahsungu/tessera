@@ -1,6 +1,6 @@
 # TESSERA001: A field's type can't be saved
 
-**Error.** `Member 'Created' of 'SaveGame' has type 'DateTime', which Tessera cannot serialize: DateTime has no C++
+**Error.** `Field 'Created' of 'SaveGame' has type 'DateTime', which Tessera cannot save: DateTime has no C++
 equivalent; store DateTime.Ticks (or ToBinary()) as a long`
 
 **What it means:** a field's type has no form that C++ can read. The message ends with the reason and, for common

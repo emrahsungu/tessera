@@ -53,7 +53,7 @@ Each option has its own page, with every case to use it in.
 | Exception | Cause |
 |---|---|
 | `ArgumentNullException` | the object to save is null |
-| `TesseraException`: no writer was generated | no serializer exists for the type: see [Which types get generated code](generated-types.md#generic-code); the message names the fix |
+| `TesseraException`: no serializer was generated | no serializer exists for the type: see [Which types get generated code](generated-types.md#generic-code); the message names the fix |
 | `TesseraException`: deeper than MaxDepth | the data nests deeper than [`MaxDepth`](../options/max-depth.md), or contains a reference cycle |
 | `TesseraException`: exceeds the 2 GB limit | the buffer would be larger than a .NET array can be |
 | `TesseraException`: too many types | the data uses more than 65,534 different types |

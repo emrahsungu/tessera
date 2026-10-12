@@ -98,8 +98,8 @@ public class GeneratorTests
     [Theory]
     [InlineData("public Dictionary<double, int>? Map;", "dictionary keys must be")]
     [InlineData("public struct S { public string? A; } public List<S?>? Values;", "nullable elements must be")]
-    [InlineData("public int[,]? Grid;", "single-dimensional")]
-    [InlineData("public object? Anything;", "concrete model type")]
+    [InlineData("public int[,]? Grid;", "one-dimensional")]
+    [InlineData("public object? Anything;", "concrete class")]
     [InlineData("public Action? Callback;", "delegates")]
     [InlineData("public IntPtr Handle;", "native-sized")]
     [InlineData("public nuint Size;", "native-sized")]
@@ -234,14 +234,14 @@ public class GeneratorTests
 
     [Theory]
     [InlineData("Item", "abstract or an interface")]
-    [InlineData("List<Weapon>", "stored inside models")]
-    [InlineData("Dictionary<string, Weapon>", "stored inside models")]
-    [InlineData("Weapon[]", "stored inside models")]
-    [InlineData("Vec3", "stored inside models")]
-    [InlineData("Faction", "stored inside models")]
-    [InlineData("string", "stored inside models")]
-    [InlineData("int?", "stored inside models")]
-    [InlineData("object", "not a model type")]
+    [InlineData("List<Weapon>", "only be stored in the fields of a class")]
+    [InlineData("Dictionary<string, Weapon>", "only be stored in the fields of a class")]
+    [InlineData("Weapon[]", "only be stored in the fields of a class")]
+    [InlineData("Vec3", "only be stored in the fields of a class")]
+    [InlineData("Faction", "only be stored in the fields of a class")]
+    [InlineData("string", "only be stored in the fields of a class")]
+    [InlineData("int?", "only be stored in the fields of a class")]
+    [InlineData("object", "not a class, record or struct")]
     public void CallsThatAlwaysThrowAreErrors(string type, string reason)
     {
         var r = Run(Unmarked + $"\npublic static class Save {{ public static byte[] Write({type} value) => TesseraSerializer.Serialize(value); }}");
@@ -282,7 +282,7 @@ public class GeneratorTests
         var d = Assert.Single(r.Diagnostics);
         Assert.Equal("TESSERA011", d.Id);
         Assert.Equal(DiagnosticSeverity.Warning, d.Severity);
-        Assert.Contains("'Plain' that are not models there (Stats)", d.GetMessage());   // Tag has no scalar members, so no defaults
+        Assert.Contains("'Plain' generates no code for (Stats)", d.GetMessage());   // Tag has no scalar members, so no defaults
         Assert.Contains("s_Hp != 0", r.Writers);
 
         // When that project serializes Stats, its generator records the initializers.

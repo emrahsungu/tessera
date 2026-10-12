@@ -11,8 +11,8 @@ namespace Tessera;
 public static class TesseraCppHeaders
 {
     /// <summary>
-    /// Returns (relative path, content) for every header embedded in <paramref name="assembly"/>: one header per model
-    /// type (<c>namespace/Type.tessera.hpp</c>) and the umbrella header that includes them.
+    /// Returns (relative path, content) for every header embedded in <paramref name="assembly"/>: one header per
+    /// class (<c>namespace/Type.tessera.hpp</c>) and the header that includes them all.
     /// </summary>
     public static IReadOnlyList<(string FileName, string Content)> Read(Assembly assembly)
     {

@@ -80,8 +80,8 @@ Thrown when saving can't succeed:
 
 | Message | Cause |
 |---|---|
-| No writer was generated for `T` ... | the source generator didn't run, or the type isn't one it generates code for: the message names the fix ([Which types get generated code](../guide/generated-types.md)) |
-| Object graph is deeper than MaxDepth ... | the data nests deeper than [`MaxDepth`](../options/max-depth.md), or contains a cycle |
+| No serializer was generated for `T` ... | the source generator didn't run, or the type isn't one it generates code for: the message names the fix ([Which types get generated code](../guide/generated-types.md)) |
+| The data nests deeper than MaxDepth ... | the data nests deeper than [`MaxDepth`](../options/max-depth.md), or contains a cycle |
 | Buffer exceeds the 2 GB limit. | the buffer would be larger than a .NET array can be |
 | Too many types in one buffer. | the data uses more than 65,534 different types |
 

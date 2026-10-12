@@ -1,6 +1,7 @@
 # TESSERA009: A class name hashes to the reserved type ID 0
 
-**Error.** `Type 'Rune' hashes to union tag 0, which means 'no value'; give it a different [Tessera("name")]`
+**Error.** `The name of class 'Rune' hashes to type ID 0, which is reserved for null; give it a different
+[Tessera("name")]`
 
 **What it means:** in a field declared as a base class or interface, saved data records which derived class each value
 is with a 32-bit ID: a hash of the class name. The ID 0 is reserved for a null value, and this class's name happens to

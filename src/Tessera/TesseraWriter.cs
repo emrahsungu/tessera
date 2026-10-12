@@ -156,7 +156,7 @@ public sealed partial class TesseraWriter
     public void Exit() => _depth--;
 
     private void ThrowTooDeep() =>
-        throw new TesseraException($"Object graph is deeper than MaxDepth ({_options.MaxDepth} nested objects and vectors); it may contain a cycle.");
+        throw new TesseraException($"The data nests deeper than MaxDepth ({_options.MaxDepth} levels of objects and lists), or contains a reference cycle.");
 
     // ------------------------------------------------------------------ references
 

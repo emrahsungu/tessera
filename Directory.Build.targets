@@ -16,6 +16,7 @@
       <_TesseraImport>$([MSBuild]::MakeRelative('$(MSBuildProjectDirectory)\', '$(MSBuildThisFileDirectory)src\Tessera.ProjectReference.targets'))</_TesseraImport>
     </PropertyGroup>
     <Warning Code="TESSERA015" Condition="'@(_TesseraRuntimeReference)' != '' and '@(_TesseraGeneratorReference)' == ''"
+             HelpLink="https://github.com/emrahsungu/tessera/blob/main/docs/diagnostics/TESSERA015.md"
              Text="This project references src/Tessera without Tessera's source generator, so no serializers are generated and Serialize will throw. The generator runs only as an analyzer, which a project reference does not pass on. Replace the reference with &lt;Import Project=&quot;$(_TesseraImport)&quot; /&gt; at the end of the project file (as samples/Quickstart does), or reference the Tessera package." />
   </Target>
 </Project>

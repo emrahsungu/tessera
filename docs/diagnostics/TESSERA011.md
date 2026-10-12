@@ -1,8 +1,8 @@
 # TESSERA011: Another project's initial field values aren't visible
 
-**Warning.** `Model types from 'Game.Data' that are not models there (Monster): initializers of their members (such as
-'= 100') are not visible here, so this project takes those members' defaults as zero; in 'Game.Data', mark these
-types [Tessera] or list them in [assembly: TesseraRoot], or give the members [DefaultValue]`
+**Warning.** `Classes from 'Game.Data' that 'Game.Data' generates no code for (Monster): the initial values of their
+fields (such as '= 100') are not visible here, so this project takes those fields' defaults as zero; in 'Game.Data',
+mark these classes [Tessera] or list them in [assembly: TesseraRoot], or give the fields [DefaultValue]`
 
 **What it means:** your project saves a class declared in another project (`Game.Data` above), and that class's fields
 have initial values (`public short Hp = 100;`).

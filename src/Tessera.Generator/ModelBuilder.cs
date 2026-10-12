@@ -62,7 +62,7 @@ namespace Tessera.Generator
             {
                 if (named.IsAbstract || named.TypeKind == TypeKind.Interface)
                 {
-                    return "it is abstract or an interface, but the root of a buffer has one concrete type; serialize the concrete type, or a model with a member of this type";
+                    return "it is abstract or an interface, and the top-level object must be one concrete class; serialize the concrete class, or a class with a field of this type";
                 }
 
                 bool inline = named.TypeKind == TypeKind.Struct && named.IsUnmanagedType;
@@ -70,10 +70,10 @@ namespace Tessera.Generator
             }
             else if (type.SpecialType == SpecialType.System_Object || type.TypeKind is TypeKind.Delegate or TypeKind.Pointer or TypeKind.FunctionPointer or TypeKind.Dynamic)
             {
-                return "it is not a model type; serialize a class, record or struct";
+                return "it is not a class, record or struct; serialize one of those";
             }
 
-            return "values of this type are stored inside models, not as the root of a buffer; serialize a model with a member of this type";
+            return "values of this type can only be stored in the fields of a class, not as the top-level object; serialize a class with a field of this type";
         }
 
         /// <param name="symbol">The root type.</param>
@@ -314,7 +314,7 @@ namespace Tessera.Generator
 
             if (type.TypeKind == TypeKind.Delegate)
             {
-                Unsupported(member, ownerName, type, "delegates cannot be serialized");
+                Unsupported(member, ownerName, type, "delegates are not data");
                 return null;
             }
 
@@ -323,7 +323,7 @@ namespace Tessera.Generator
                 var e = GetEnum(enumType);
                 if (e == null)
                 {
-                    Unsupported(member, ownerName, type, "enum has an unsupported underlying type");
+                    Unsupported(member, ownerName, type, "this enum's underlying type is not supported");
                     return null;
                 }
 
@@ -336,7 +336,7 @@ namespace Tessera.Generator
             {
                 if (array.Rank != 1)
                 {
-                    Unsupported(member, ownerName, type, "only single-dimensional arrays are supported");
+                    Unsupported(member, ownerName, type, "only one-dimensional arrays are supported; use nested lists or a flat array");
                     return null;
                 }
 
@@ -370,7 +370,7 @@ namespace Tessera.Generator
                 {
                     if (named.SpecialType == SpecialType.System_Object || IsDelegate(named) || named.IsGenericType && named.IsUnboundGenericType)
                     {
-                        Unsupported(member, ownerName, type, "use a concrete model type");
+                        Unsupported(member, ownerName, type, "use a concrete class");
                         return null;
                     }
 
@@ -558,7 +558,7 @@ namespace Tessera.Generator
             {
                 case SpecialType.System_IntPtr:
                 case SpecialType.System_UIntPtr:
-                    return "native-sized integers have no fixed size on the wire; use int or long";
+                    return "native-sized integers have different sizes on different machines; use int or long";
                 case SpecialType.System_Decimal:
                     return "decimal has no C++ equivalent; store it as double, a scaled long or a string";
                 case SpecialType.System_DateTime:

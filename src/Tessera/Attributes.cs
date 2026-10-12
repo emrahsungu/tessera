@@ -3,12 +3,13 @@ using System;
 namespace Tessera;
 
 /// <summary>
-/// Optional. Makes a class, record or struct a model even when nothing in its project serializes it. Without it, a type
-/// is a model when its project serializes it (<c>TesseraSerializer.Serialize(value)</c> with a known type), when a
-/// model uses it, or when it derives from the type of an abstract or interface member of a model. On a type that is
-/// already a model, a bare <c>[Tessera]</c> changes neither the buffers nor the generated code of its project. What it
-/// adds: C++ gets the type's header even if no C# code writes it, other projects see its member initializers and find
-/// it as a union member, and <c>[Tessera("Name")]</c> fixes its union tag.
+/// Optional. Generates the serializer and the C++ header for this class, record or struct even if no code in its project
+/// saves it. Without it, they are generated when the project saves the type (<c>TesseraSerializer.Serialize(value)</c>
+/// with the type known), uses it as the type of a field, or derives it from the declared type of a field. On a type
+/// that gets them anyway, the attribute changes nothing in its project. What it adds: C++ gets the header even if no C#
+/// code saves the type; other projects see the initial values of its fields, and can store it in their fields declared
+/// as its base class or interface; and <c>[Tessera("Name")]</c> fixes the name that identifies it in such fields.
+/// Documentation: docs/attributes/tessera.md.
 /// </summary>
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, Inherited = false)]
 public sealed class TesseraAttribute : Attribute
@@ -16,17 +17,17 @@ public sealed class TesseraAttribute : Attribute
     /// <summary>Creates the attribute using the C# type name as the stable type name.</summary>
     public TesseraAttribute() { }
 
-    /// <summary>Creates the attribute with an explicit stable type name (used for union tags).</summary>
+    /// <summary>Creates the attribute with a fixed name, which identifies the class in fields declared as its base class or interface.</summary>
     public TesseraAttribute(string name) => Name = name;
 
-    /// <summary>Stable type name. Defaults to the C# type name. Only union tags depend on it.</summary>
+    /// <summary>The name that identifies the class in fields declared as its base class or interface (saved as a hash). Defaults to the C# class name.</summary>
     public string? Name { get; }
 }
 
 /// <summary>
-/// Makes types models of this project without editing them: types that only C++ reads, types this project does not
-/// serialize itself, and types of other projects. For a type declared in this project it has the same effect as
-/// <c>[Tessera]</c>. <code>[assembly: TesseraRoot(typeof(Monster), typeof(World))]</code>
+/// Generates the serializers and C++ headers of the listed types, as <c>[Tessera]</c> on each would: for types only C++
+/// reads, types this project saves only through generic code, and types of other projects.
+/// <code>[assembly: TesseraRoot(typeof(Monster), typeof(World))]</code> Documentation: docs/attributes/tessera-root.md.
 /// </summary>
 [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
 public sealed class TesseraRootAttribute : Attribute
@@ -34,17 +35,17 @@ public sealed class TesseraRootAttribute : Attribute
     /// <summary>Creates the attribute.</summary>
     public TesseraRootAttribute(params Type[] types) => Types = types;
 
-    /// <summary>The model types.</summary>
+    /// <summary>The listed types.</summary>
     public Type[] Types { get; }
 }
 
-/// <summary>Excludes a field or property from serialization.</summary>
+/// <summary>Does not save this field or property.</summary>
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
 public sealed class TesseraIgnoreAttribute : Attribute { }
 
 /// <summary>
-/// Sets the stable wire name of a member. Member identity on the wire is a hash of this name, so keeping the old name
-/// here lets you rename the C# member without breaking existing buffers.
+/// Saves the field under this name instead of its C# name. Saved data identifies fields by a hash of their name, so
+/// keeping the old name here lets you rename the C# field without breaking data saved before.
 /// </summary>
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
 public sealed class TesseraNameAttribute : Attribute
@@ -52,29 +53,30 @@ public sealed class TesseraNameAttribute : Attribute
     /// <summary>Creates the attribute.</summary>
     public TesseraNameAttribute(string name) => Name = name;
 
-    /// <summary>The wire name.</summary>
+    /// <summary>The saved name.</summary>
     public string Name { get; }
 }
 
 /// <summary>
-/// Stores a fixed-size struct member out of line behind a 4-byte offset so equal values are written once (when sharing
-/// is enabled). By default structs are stored inline. Can be placed on a member or on the struct type.
+/// Stores this struct's value outside the object, with a 4-byte reference to it, so that equal values are stored once
+/// when saving with <c>Sharing.All</c>. Plain structs are otherwise stored inside the object. On a field, a property, or
+/// the struct type.
 /// </summary>
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property | AttributeTargets.Struct)]
 public sealed class TesseraSharedAttribute : Attribute { }
 
 /// <summary>
-/// Always writes a non-nullable member, even when it equals its default value. Without it, members equal to their
-/// default are omitted and readers return the default. Scalars, enums and inline structs marked with it are stored at
-/// a fixed position without a presence bit, so C++ reads them with a single load.
+/// Always saves this field, even when it equals its default value (normally such fields are left out, and readers
+/// return the default). Number, enum and plain-struct fields are then stored at a fixed position, so C++ reads them
+/// with a single memory load.
 /// </summary>
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
 public sealed class TesseraKeepDefaultAttribute : Attribute { }
 
 /// <summary>
-/// Declares the concrete types that a polymorphic (abstract or interface) member may hold. Without it the generator
-/// uses every public or internal non-abstract type of this project that derives from the member type, and every type
-/// that a referenced project marks with [Tessera] or lists in [assembly: TesseraRoot] and that derives from it.
+/// Lists the classes that a field declared as a base class or interface may hold. Without it, such a field may hold
+/// every public or internal class of this project that derives from its type, and every class of a referenced project
+/// that is marked [Tessera] or listed in [assembly: TesseraRoot].
 /// </summary>
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Interface | AttributeTargets.Field | AttributeTargets.Property, AllowMultiple = true)]
 public sealed class TesseraUnionAttribute : Attribute
@@ -82,13 +84,13 @@ public sealed class TesseraUnionAttribute : Attribute
     /// <summary>Creates the attribute.</summary>
     public TesseraUnionAttribute(params Type[] types) => Types = types;
 
-    /// <summary>The allowed concrete types.</summary>
+    /// <summary>The allowed classes.</summary>
     public Type[] Types { get; }
 }
 
 /// <summary>
-/// Records a member's declared default (its initializer, e.g. <c>public short Hp = 100;</c>) in the compiled assembly,
-/// where the source generator of another model assembly that uses the type can read it. Emitted by the source generator.
+/// Records the initial value of a field (<c>public short Hp = 100;</c>) in the compiled assembly, so that the source
+/// generator of another project that saves the type can read it. Added by the source generator; don't write it.
 /// </summary>
 [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
 [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
@@ -105,7 +107,7 @@ public sealed class TesseraDefaultAttribute : Attribute
     /// <summary>The type that declares the member.</summary>
     public Type Type { get; }
 
-    /// <summary>The C# member name.</summary>
+    /// <summary>The C# field or property name.</summary>
     public string Member { get; }
 
     /// <summary>The default value.</summary>
@@ -113,8 +115,8 @@ public sealed class TesseraDefaultAttribute : Attribute
 }
 
 /// <summary>
-/// Records that the source generator of this assembly treated a type declared here as a model, so the member defaults
-/// it recorded in <see cref="TesseraDefaultAttribute"/> are complete. Emitted by the source generator.
+/// Records that this assembly generated code for the type, so its <see cref="TesseraDefaultAttribute"/> entries are
+/// complete. Added by the source generator; don't write it.
 /// </summary>
 [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
 [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
@@ -123,11 +125,11 @@ public sealed class TesseraDeclaredAttribute : Attribute
     /// <summary>Creates the attribute.</summary>
     public TesseraDeclaredAttribute(Type type) => Type = type;
 
-    /// <summary>The model type.</summary>
+    /// <summary>The type.</summary>
     public Type Type { get; }
 }
 
-/// <summary>Carries a generated C++ header inside the compiled assembly. Emitted by the source generator.</summary>
+/// <summary>Carries a generated C++ header inside the compiled assembly. Added by the source generator; don't write it.</summary>
 [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
 public sealed class TesseraCppHeaderAttribute : Attribute
 {

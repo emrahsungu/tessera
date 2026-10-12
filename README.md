@@ -75,7 +75,7 @@ public:
     std::optional<std::int32_t> mana() const noexcept;      // int? Mana
     const Vec3&                 position() const noexcept;  // Vec3 Position
     tessera::Vector<Weapon>     weapons() const noexcept;   // List<Weapon>? Weapons
-    // has_name(), has_hp() ...: whether each member was stored
+    // has_name(), has_hp() ...: whether each field was saved
 };
 ```
 

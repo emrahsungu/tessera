@@ -1,7 +1,7 @@
 # TESSERA004: Two derived classes would get the same type ID
 
-**Error.** `Types 'Game.Items.Key' and 'Game.Doors.Key' in union 'Item' have the same type id; give one of them a
-different [Tessera("name")]`
+**Error.** `Classes 'Game.Items.Key' and 'Game.Doors.Key', both saved in fields of type 'Item', would get the same
+type ID (a hash of the class name); give one of them a different [Tessera("name")]`
 
 **What it means:** a field declared as a base class or interface can hold several derived classes, so saved data
 records which class each value is, with a 32-bit ID: a hash of the class name, without its namespace. Two of the

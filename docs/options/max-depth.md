@@ -14,8 +14,8 @@ The writer counts nesting levels as it goes. Every object and every list is a le
 the weapons. The number of elements in a list doesn't matter, only how deep the nesting goes.
 
 A cycle of references (an object that contains itself, directly or through others) would nest forever, so this limit
-also turns cycles into an exception: *Object graph is deeper than MaxDepth (128 nested objects and vectors); it may
-contain a cycle.*
+also turns cycles into an exception: *The data nests deeper than MaxDepth (128 levels of objects and lists), or
+contains a reference cycle.*
 
 The C++ reader has the same limit, `Options::max_depth`, also 128 by default, and rejects deeper buffers with
 `Error::TooDeep` ([C++ read options](cpp-read-options.md)).

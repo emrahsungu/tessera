@@ -1,7 +1,7 @@
 # TESSERA012: Strict mode: a saved class isn't marked
 
-**Error.** `'Weapon' is a model but has no [Tessera] and is not listed in [assembly: TesseraRoot];
-TesseraRequireAttribute requires every model class, record and struct to be marked`
+**Error.** `'Weapon' is saved but has no [Tessera] and is not listed in [assembly: TesseraRoot];
+TesseraRequireAttribute requires every saved class, record and struct to be marked`
 
 **What it means:** the project turned on strict mode (`<TesseraRequireAttribute>true</TesseraRequireAttribute>`),
 which requires every class that gets saved to be marked, so that nothing enters your saved data unannounced. This

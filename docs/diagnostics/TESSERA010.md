@@ -1,8 +1,8 @@
 # TESSERA010: A generic method hides which types it saves
 
-**Info.** `This call serializes the type parameter 'T', so the generator cannot tell which models it writes; types used
-only through it get no writer unless they have [Tessera], are listed in [assembly: TesseraRoot(typeof(...))] or are
-serialized elsewhere with their concrete type`
+**Info.** `This call saves the type parameter 'T', so the generator cannot tell which classes it saves; a class saved
+only through it gets no serializer unless it has [Tessera], is listed in [assembly: TesseraRoot(typeof(...))], or is
+saved elsewhere with its real type`
 
 **What it means:** a generic method passes its type parameter to `Serialize`:
 

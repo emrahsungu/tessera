@@ -1,8 +1,8 @@
 # TESSERA003: No class can be saved in a field of this type
 
-**Error.** `'Item' is abstract or an interface, but no public or internal concrete type of this project derives from
-it, and no referenced project marks one with [Tessera] or lists one in [assembly: TesseraRoot]; mark the derived types
-in their project, or list them with [TesseraUnion(...)]`
+**Error.** `Fields of type 'Item' can hold only classes derived from it, and none can be saved: no public or internal
+class of this project derives from it, and no referenced project marks one with [Tessera] or lists one in [assembly:
+TesseraRoot]; mark the derived classes in their project, or list them with [TesseraUnion(...)]`
 
 **What it means:** a field is declared as an abstract class or an interface, so it holds instances of derived
 classes. The generator found no derived class it could save there.

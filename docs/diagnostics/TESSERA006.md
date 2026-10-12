@@ -1,6 +1,6 @@
 # TESSERA006: A struct's memory layout can't be saved as it is
 
-**Error.** `Struct 'Packet' cannot be stored inline: explicit layout is not supported`
+**Error.** `Struct 'Packet' cannot be saved byte for byte: explicit layout is not supported`
 
 **What it means:** a struct with only numbers and other plain values inside is saved byte for byte, in its C# memory
 layout, and C++ reads it as a struct with the same layout. This struct can't be, for the reason given:

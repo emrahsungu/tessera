@@ -1,6 +1,6 @@
 # TESSERA007: A C++ method was renamed to avoid a clash
 
-**Info.** `C++ accessor for member 'HasName' of 'Monster' was renamed to 'has_name_2' to avoid a clash`
+**Info.** `The C++ method for field 'HasName' of 'Monster' was renamed to 'has_name_2' to avoid a clash`
 
 **What it means:** each field gets a C++ method named after it (`name()`) and a method that tells whether it was saved
 (`has_name()`). Two of these names clashed, for example a field `HasName` next to the `has_name()` of a field `Name`,

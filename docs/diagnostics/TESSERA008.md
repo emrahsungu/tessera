@@ -1,7 +1,7 @@
 # TESSERA008: A C++ class was renamed to avoid a clash
 
-**Info.** `C++ type for 'Game.Ui.Button' was renamed to 'Button_2' because another type in the same C++ namespace has
-that name`
+**Info.** `The C++ class for 'Game.Ui.Button' was renamed to 'Button_2' because another class in the same C++
+namespace has that name`
 
 **What it means:** two of your classes would get the same C++ class name in the same C++ namespace, so the generator
 added a number to one. This happens when two C# namespaces map to one C++ namespace, usually because
