@@ -5,7 +5,7 @@
 - C++ compilers: clang 19.1, gcc 15.2, msvc 19.42.34444
 - .NET libraries: Tessera 0.1.0.0, FlatBuffers 25.12.19 (C# runtime built from the release source), MessagePack-CSharp 3.1.10, MemoryPack 1.21.4, Google.Protobuf 3.36.2, System.Text.Json 10.0.12, Newtonsoft.Json 13.0.4; measured with BenchmarkDotNet 0.15.8
 - C++ libraries: FlatBuffers 25.12.19, msgpack-cxx 9.0.0, libprotobuf 36.2 (with Abseil 20250512.1), simdjson 5.0.3, each compiled from source with the benchmark's flags
-- Recorded 2026-10-12 10:23:21Z. Medians of interleaved rounds; ±MAD in the raw JSON.
+- Recorded 2026-10-12 17:19:36Z. Medians of interleaved rounds; ±MAD in the raw JSON.
 
 Every library writes the same C# objects. Every C++ reader computes a checksum over every field (presence included), which must match the value computed from the C# objects before anything is timed. The C++ readers' small helper functions are force-inlined with MSVC, for every library: MSVC stopped inlining them into one large function when it read Tessera (`benchmarks/native/readers.hpp` explains).
 
@@ -16,25 +16,25 @@ How many times faster (or smaller) Tessera is: the other library's time or size 
 | | vs FlatBuffers | vs MessagePack | vs Protobuf | vs JSON | vs MemoryPack |
 |---|---:|---:|---:|---:|---:|
 | Size | **1.27** (1.00–3.37) | 0.90 (0.59–2.01) | 0.92 (0.65–1.42) | **2.15** (1.30–3.04) | **1.28** (0.87–8.48) |
-| .NET write | **6.36** (1.39–31.27) | **2.29** (1.15–6.67) | **4.58** (2.70–22.97) | **14.44** (4.30–185.48) | 0.66 (0.45–0.84) |
-| C++ verify (clang 19.1) | **2.98** (1.69–9.21) | **18.68** (6.69–1459.30) | **14.43** (5.24–813.85) | **24.90** (10.74–2877.15) |  |
-| C++ full traversal (clang 19.1) | **1.06** (1.00–1.20) |  |  |  |  |
-| C++ verify + traversal (clang 19.1) | **1.68** (1.05–2.52) | **5.72** (3.99–14.53) | **4.53** (2.21–9.81) | **11.73** (5.95–27.97) |  |
-| C++ random access (clang 19.1) | **1.27** (1.05–1.97) |  |  |  |  |
-| C++ verify (gcc 15.2) | **3.97** (2.44–18.85) | **18.79** (7.01–1146.78) | **15.71** (6.23–638.89) | **33.99** (14.18–3122.13) |  |
-| C++ full traversal (gcc 15.2) | **1.03** (0.99–1.20) |  |  |  |  |
-| C++ verify + traversal (gcc 15.2) | **1.86** (1.02–2.80) | **4.71** (3.71–10.16) | **4.05** (2.31–9.49) | **10.65** (5.40–25.20) |  |
-| C++ random access (gcc 15.2) | **1.20** (1.01–2.12) |  |  |  |  |
-| C++ verify (msvc 19.42.34444) | **2.73** (1.66–12.41) | **22.33** (8.05–1687.54) | **17.29** (6.76–1083.31) | **27.39** (12.52–2863.14) |  |
-| C++ full traversal (msvc 19.42.34444) | **1.12** (1.00–2.03) |  |  |  |  |
-| C++ verify + traversal (msvc 19.42.34444) | **1.62** (1.03–3.32) | **6.39** (4.45–17.11) | **5.12** (2.23–11.04) | **18.33** (5.59–55.99) |  |
-| C++ random access (msvc 19.42.34444) | **1.32** (1.13–1.79) |  |  |  |  |
+| .NET write | **9.41** (1.65–99.96) | **3.32** (1.30–10.79) | **6.32** (3.36–27.79) | **20.63** (7.57–206.41) | 0.99 (0.65–1.60) |
+| C++ verify (clang 19.1) | **2.99** (1.68–9.25) | **17.77** (6.46–1459.04) | **12.81** (4.80–706.79) | **24.89** (10.80–2868.29) |  |
+| C++ full traversal (clang 19.1) | **1.05** (1.00–1.18) |  |  |  |  |
+| C++ verify + traversal (clang 19.1) | **1.68** (1.05–2.51) | **5.38** (3.84–13.93) | **4.08** (2.13–9.08) | **11.26** (5.39–27.66) |  |
+| C++ random access (clang 19.1) | **1.27** (1.04–2.00) |  |  |  |  |
+| C++ verify (gcc 15.2) | **3.97** (2.44–18.39) | **18.77** (7.08–1154.17) | **15.95** (6.28–686.92) | **34.13** (14.31–3206.53) |  |
+| C++ full traversal (gcc 15.2) | **1.04** (0.99–1.19) |  |  |  |  |
+| C++ verify + traversal (gcc 15.2) | **1.85** (1.04–2.78) | **4.77** (3.75–10.84) | **4.11** (2.30–9.25) | **10.72** (5.44–25.68) |  |
+| C++ random access (gcc 15.2) | **1.19** (1.03–2.02) |  |  |  |  |
+| C++ verify (msvc 19.42.34444) | **2.72** (1.68–12.40) | **23.91** (8.60–1684.82) | **20.10** (7.74–1187.84) | **27.35** (12.70–2832.85) |  |
+| C++ full traversal (msvc 19.42.34444) | **1.13** (1.00–2.03) |  |  |  |  |
+| C++ verify + traversal (msvc 19.42.34444) | **1.62** (1.03–3.33) | **6.83** (4.59–17.62) | **5.95** (2.33–12.47) | **18.44** (6.05–56.20) |  |
+| C++ random access (msvc 19.42.34444) | **1.33** (1.14–1.79) |  |  |  |  |
 
 MessagePack, Protobuf and JSON are parsed before they are read: their "verify" is the parse (into a tree for MessagePack and Protobuf, into simdjson's DOM for JSON), and their traversal and random access read a tree parsed beforehand, so those two are left out of their columns. JSON is written by System.Text.Json and read by simdjson. MemoryPack has no C++ reader. How each parser is set up is in the C++ section below.
 
 Where Tessera is slower or larger in these results (by more than 5% for the C++ reads), and why:
 
-- **.NET write** (MemoryPack faster): prefab 1.32×, monsters 1.55×, records 2.22×, series 1.40×, dense-unique 1.97×, sparse-unique 1.29×, dense-shared 1.60×, lookup 1.20×, canada 1.30×. MemoryPack writes the members one after another, with nothing that lets a reader find one without reading those before it, and copies arrays of plain structs as they lie in memory; it can only be read from the start, and only by .NET.
+- **.NET write** (MemoryPack faster): monsters 1.11×, dense-unique 1.53×, dense-shared 1.21×, lookup 1.01×, canada 1.02×. MemoryPack writes the members one after another, with nothing that lets a reader find one without reading those before it, and copies arrays of plain structs as they lie in memory; it can only be read from the start, and only by .NET.
 - **Size** (MessagePack smaller): monsters 1.19×, series 1.11×, dense-unique 1.69×, sparse-unique 1.26×, dense-shared 1.70×, lookup 1.39×. MessagePack stores small integers in one or two bytes; Tessera keeps values fixed-width so they can be read in place.
 - **Size** (Protobuf smaller): monsters 1.07×, series 1.24×, dense-unique 1.53×, sparse-unique 1.31×, dense-shared 1.33×, lookup 1.09×. Protobuf stores integers as varints (one byte for small values) and leaves out zeros; Tessera keeps values fixed-width so they can be read in place.
 - **Size** (MemoryPack smaller): monsters 1.08×, dense-unique 1.15×, lookup 1.09×, canada 1.00×. MemoryPack writes the members one after another, with nothing that lets a reader find one without reading those before it; Tessera stores the offsets that let C++ read any member directly.
@@ -77,29 +77,29 @@ Measured with BenchmarkDotNet: every case in a process of its own, with collecti
 
 | Workload | Tessera | Tessera (no sharing) | Tessera (full sharing) | FlatBuffers | MessagePack | MemoryPack | Protobuf | Protobuf (prebuilt messages) | System.Text.Json | Newtonsoft.Json |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| prefab | 76.8 | 62.1 | 128 | 309 | 180 | **58.3** | 397 | 289 | 1,110 | 3,176 |
-| monsters | 162 | 134 | 311 | 836 | 290 | **104** | 729 | 516 | 2,281 | 4,695 |
-| records | 266 | 263 | 355 | 7,887 | 882 | **120** | 729 | 564 | 1,146 | 2,686 |
-| series | 304 | 307 | 879 | 1,845 | 571 | **217** | 1,015 | 606 | 4,461 | 10,231 |
-| dense-unique | 42.8 | 27.9 | 90.2 | 177 | 70.1 | **21.8** | 223 | 115 | 450 | 1,007 |
-| sparse-unique | 23.3 | 19.1 | 45.9 | 118 | 57.2 | **18.1** | 62.9 | 43.6 | 335 | 708 |
-| dense-shared | 35.1 | 27.7 | 90.0 | 176 | 75.4 | **22.0** | 150 | 97.8 | 397 | 924 |
-| lookup | 196 | 183 | 311 | 6,128 | 225 | **164** | 590 | 403 | 1,311 | 2,730 |
-| canada | 90.0 | 94.9 | 338 | 125 | 601 | **69.4** | 2,068 | 1,125 | 16,701 | 26,159 |
+| prefab | 55.8 | **45.4** | 112 | 318 | 181 | 59.7 | 397 | 299 | 1,128 | 3,022 |
+| monsters | 123 | **111** | 288 | 827 | 307 | 111 | 753 | 541 | 2,306 | 5,452 |
+| records | **82.1** | 88.2 | 157 | 8,207 | 886 | 132 | 742 | 564 | 1,147 | 2,699 |
+| series | 195 | **191** | 767 | 1,818 | 553 | 208 | 981 | 602 | 4,321 | 10,017 |
+| dense-unique | 36.1 | 24.9 | 85.7 | 181 | 74.8 | **23.6** | 170 | 120 | 465 | 1,077 |
+| sparse-unique | 16.5 | **13.7** | 41.5 | 117 | 58.4 | 17.1 | 57.3 | 42.7 | 333 | 692 |
+| dense-shared | 28.7 | 25.5 | 87.3 | 179 | 76.2 | **23.7** | 153 | 103 | 405 | 993 |
+| lookup | 180 | **165** | 301 | 7,928 | 234 | 177 | 604 | 406 | 1,362 | 2,849 |
+| canada | 83.0 | 82.7 | 344 | 137 | 642 | **81.2** | 2,306 | 1,214 | 17,132 | 27,353 |
 
 Without the final copy (into a reused writer, builder or buffer), µs:
 
 | Workload | Tessera | FlatBuffers | MessagePack | MemoryPack | Protobuf | System.Text.Json | Newtonsoft.Json |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| prefab | 73.5 | 309 | 169 | **50.8** | 326 | 1,061 | 3,146 |
-| monsters | 157 | 825 | 282 | **100** | 596 | 2,313 | 5,070 |
-| records | 261 | 7,830 | 935 | **93.3** | 583 | 1,158 | 2,651 |
-| series | 265 | 1,953 | 521 | **180** | 842 | 4,355 | 10,323 |
-| dense-unique | 39.2 | 238 | 68.1 | **19.5** | 132 | 457 | 1,013 |
-| sparse-unique | 21.3 | 113 | 61.3 | **15.5** | 54.1 | 339 | 713 |
-| dense-shared | 33.0 | 171 | 68.5 | **19.6** | 124 | 406 | 927 |
-| lookup | 184 | 6,113 | 211 | **154** | 473 | 1,317 | 2,709 |
-| canada | 52.2 | 66.5 | 995 | **30.9** | 1,889 | 16,277 | 26,248 |
+| prefab | **49.2** | 310 | 169 | 53.0 | 330 | 1,088 | 3,221 |
+| monsters | 111 | 840 | 299 | **106** | 612 | 2,350 | 5,362 |
+| records | **92.7** | 8,011 | 872 | 94.9 | 577 | 1,145 | 2,654 |
+| series | **169** | 1,759 | 511 | 180 | 831 | 4,215 | 10,010 |
+| dense-unique | 33.0 | 177 | 73.7 | **20.3** | 210 | 474 | 1,057 |
+| sparse-unique | **15.2** | 119 | 54.9 | 15.3 | 51.1 | 332 | 696 |
+| dense-shared | 25.1 | 177 | 69.3 | **20.3** | 133 | 412 | 958 |
+| lookup | 164 | 6,575 | 218 | **155** | 509 | 1,347 | 2,794 |
+| canada | 34.3 | 68.6 | 1,013 | **31.4** | 2,028 | 16,692 | 27,224 |
 
 Bytes allocated per write without the final copy:
 
@@ -120,7 +120,7 @@ Bytes allocated per write without the final copy:
 Tessera and FlatBuffers read the buffer where it lies. The parsers are each set up their fastest way, measured, and reuse their memory from one parse to the next:
 
 - msgpack-cxx parses into a reused zone, with strings and binary data referenced in the buffer (its zero-copy option) rather than copied. Its tree for the traversal, random access and lookups is parsed once with the strings copied: that reads as fast and scans keys twice as fast.
-- libprotobuf parses into a reused message object, as Google advises (a message keeps the memory it allocated when it is cleared). Its parsed tree for the traversal and random access is on an arena, which reads a few percent faster. A new arena per parse, the other fast way, is faster on prefab (clang 19.1 227 µs instead of 330; gcc 15.2 184 µs instead of 259; msvc 19.42.34444 241 µs instead of 328): there every element replaces a oneof's member, which a reused message allocates anew.
+- libprotobuf parses into a reused message object, as Google advises (a message keeps the memory it allocated when it is cleared). Its parsed tree for the traversal and random access is on an arena, which reads a few percent faster. A new arena per parse, the other fast way, is faster on prefab (clang 19.1 195 µs instead of 297; gcc 15.2 191 µs instead of 267; msvc 19.42.34444 294 µs instead of 383): there every element replaces a oneof's member, which a reused message allocates anew.
 - simdjson reuses its parser. "Verify" parses into its DOM, which validates the whole document; the other operations stream through the document with its On-Demand API, its fastest way, computing the checksum without building a tree.
 
 ### clang 19.1 (µs, lower is better)
@@ -129,71 +129,71 @@ Tessera and FlatBuffers read the buffer where it lies. The parsers are each set 
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **16.8** | 33.6 | 197 | 330 | 286 | 2.01× faster |
-| monsters | **40.2** | 67.8 | 321 | 340 | 578 | 1.69× faster |
-| records | **24.1** | 223 | 578 | 229 | 267 | 9.21× faster |
-| series | **69.5** | 211 | 829 | 365 | 1,436 | 3.04× faster |
-| dense-unique | **11.7** | 22.2 | 92.1 | 80.5 | 132 | 1.90× faster |
-| sparse-unique | **6.33** | 17.5 | 68.3 | 36.1 | 81.8 | 2.76× faster |
-| dense-shared | **11.7** | 22.3 | 78.1 | 83.9 | 125 | 1.91× faster |
-| lookup | **20.7** | 85.2 | 260 | 297 | 302 | 4.11× faster |
-| canada | **0.96** | 4.65 | 1,407 | 784 | 2,773 | 4.83× faster |
+| prefab | **16.5** | 32.8 | 194 | 297 | 281 | 1.99× faster |
+| monsters | **39.5** | 66.4 | 310 | 289 | 574 | 1.68× faster |
+| records | **23.8** | 220 | 566 | 215 | 264 | 9.25× faster |
+| series | **69.0** | 210 | 722 | 331 | 1,389 | 3.04× faster |
+| dense-unique | **11.5** | 22.0 | 85.1 | 66.3 | 130 | 1.91× faster |
+| sparse-unique | **6.27** | 17.4 | 64.1 | 31.5 | 80.7 | 2.77× faster |
+| dense-shared | **11.5** | 21.9 | 74.1 | 69.0 | 124 | 1.91× faster |
+| lookup | **20.4** | 83.8 | 219 | 269 | 299 | 4.10× faster |
+| canada | **0.95** | 4.58 | 1,382 | 670 | 2,717 | 4.83× faster |
 
 **Full traversal of every field (MessagePack and Protobuf: over the already parsed tree)**
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **18.5** | 19.9 | 21.5 | 19.3 |  | 1.08× faster |
-| monsters | **35.5** | 42.5 | 36.6 | 36.1 |  | 1.20× faster |
-| records | **112** | 128 | 117 | 78.3 |  | 1.14× faster |
-| series | **96.1** | 102 | 103 | 96.6 |  | 1.06× faster |
-| dense-unique | 10.9 | **10.9** | 11.0 | 10.9 |  | 1.00× slower |
-| sparse-unique | **8.38** | 8.39 | 8.58 | 8.34 |  | 1.00× faster |
-| dense-shared | **10.9** | 11.0 | 10.9 | 10.9 |  | 1.01× faster |
-| lookup | **28.8** | 30.0 | 28.9 | 28.8 |  | 1.04× faster |
-| canada | **107** | 107 | 117 | 112 |  | 1.00× faster |
+| prefab | **18.2** | 19.4 | 21.1 | 19.1 |  | 1.06× faster |
+| monsters | **35.2** | 41.6 | 36.2 | 35.7 |  | 1.18× faster |
+| records | **110** | 126 | 113 | 77.6 |  | 1.14× faster |
+| series | **95.7** | 102 | 96.7 | 95.6 |  | 1.06× faster |
+| dense-unique | **10.8** | 10.8 | 10.8 | 10.8 |  | 1.00× faster |
+| sparse-unique | **8.31** | 8.31 | 8.44 | 8.30 |  | 1.00× faster |
+| dense-shared | **10.8** | 10.8 | 10.9 | 10.8 |  | 1.00× faster |
+| lookup | **28.6** | 29.4 | 28.8 | 28.7 |  | 1.03× faster |
+| canada | **106** | 106 | 108 | 107 |  | 1.00× faster |
 
 **Verify + full traversal (safe end-to-end read)**
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **35.8** | 57.1 | 223 | 352 | 433 | 1.59× faster |
-| monsters | **79.3** | 121 | 363 | 380 | 888 | 1.52× faster |
-| records | **143** | 360 | 709 | 316 | 852 | 2.52× faster |
-| series | **166** | 315 | 960 | 462 | 2,680 | 1.90× faster |
-| dense-unique | **22.5** | 33.1 | 102 | 91.2 | 264 | 1.47× faster |
-| sparse-unique | **14.8** | 26.2 | 77.4 | 44.9 | 166 | 1.77× faster |
-| dense-shared | **22.5** | 33.3 | 89.6 | 95.5 | 260 | 1.48× faster |
-| lookup | **49.6** | 115 | 289 | 325 | 375 | 2.32× faster |
-| canada | **108** | 113 | 1,571 | 874 | 3,023 | 1.05× faster |
+| prefab | **35.3** | 55.8 | 216 | 320 | 417 | 1.58× faster |
+| monsters | **78.1** | 118 | 349 | 333 | 844 | 1.52× faster |
+| records | **142** | 355 | 684 | 301 | 764 | 2.51× faster |
+| series | **165** | 312 | 820 | 427 | 2,610 | 1.89× faster |
+| dense-unique | **22.3** | 32.7 | 96.0 | 77.0 | 247 | 1.47× faster |
+| sparse-unique | **14.6** | 25.7 | 72.4 | 39.7 | 156 | 1.76× faster |
+| dense-shared | **22.2** | 32.7 | 85.3 | 79.5 | 241 | 1.47× faster |
+| lookup | **49.1** | 113 | 247 | 299 | 367 | 2.31× faster |
+| canada | **107** | 113 | 1,497 | 782 | 2,973 | 1.05× faster |
 
 **1000 random element reads (MessagePack and Protobuf: on the parsed tree)**
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **4.71** | 4.95 | 5.01 | 7.41 |  | 1.05× faster |
-| monsters | **4.96** | 5.23 | 6.43 | 8.11 |  | 1.05× faster |
-| records | **3.04** | 3.55 | 5.93 | 3.57 |  | 1.17× faster |
-| series | **3.41** | 4.01 | 3.23 | 4.70 |  | 1.18× faster |
-| dense-unique | **3.35** | 4.22 | 3.16 | 3.78 |  | 1.26× faster |
-| sparse-unique | **2.42** | 4.76 | 2.70 | 2.71 |  | 1.97× faster |
-| dense-shared | **3.39** | 4.41 | 3.12 | 4.06 |  | 1.30× faster |
-| lookup | **1.97** | 2.25 | 1.66 | 4.38 |  | 1.14× faster |
-| canada | **1.64** | 2.54 | 1.89 | 6.26 |  | 1.55× faster |
+| prefab | **4.63** | 4.86 | 4.94 | 6.10 |  | 1.05× faster |
+| monsters | **4.85** | 5.07 | 6.36 | 7.85 |  | 1.04× faster |
+| records | **2.92** | 3.44 | 5.87 | 3.51 |  | 1.18× faster |
+| series | **3.38** | 3.91 | 3.17 | 3.42 |  | 1.15× faster |
+| dense-unique | **3.30** | 4.12 | 3.09 | 3.75 |  | 1.25× faster |
+| sparse-unique | **2.36** | 4.72 | 2.57 | 2.71 |  | 2.00× faster |
+| dense-shared | **3.32** | 4.30 | 3.18 | 3.79 |  | 1.30× faster |
+| lookup | **1.90** | 2.19 | 1.63 | 4.26 |  | 1.15× faster |
+| canada | **1.61** | 2.48 | 1.89 | 6.11 |  | 1.54× faster |
 
 **Open + read one field (the parsers parse first)**
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **0.0063** | 0.0075 | 199 | 325 | 112 | 1.19× faster |
-| monsters | **0.0065** | 0.0077 | 321 | 341 | 166 | 1.20× faster |
-| records | **0.0039** | 0.0049 | 578 | 229 | 75.9 | 1.25× faster |
-| series | **0.0038** | 0.0056 | 837 | 368 | 499 | 1.46× faster |
-| dense-unique | **0.0051** | 0.0061 | 91.2 | 80.6 | 46.7 | 1.19× faster |
-| sparse-unique | **0.0051** | 0.0061 | 68.3 | 35.7 | 25.2 | 1.19× faster |
-| dense-shared | **0.0047** | 0.0061 | 78.1 | 83.7 | 45.9 | 1.30× faster |
-| lookup | **0.0042** | 0.0046 | 262 | 295 | 97.6 | 1.11× faster |
-| canada | **0.0068** | 0.0080 | 1,399 | 759 | 599 | 1.17× faster |
+| prefab | **0.0062** | 0.0091 | 194 | 297 | 98.9 | 1.46× faster |
+| monsters | **0.0064** | 0.0076 | 309 | 287 | 147 | 1.19× faster |
+| records | **0.0039** | 0.0048 | 566 | 215 | 71.1 | 1.25× faster |
+| series | **0.0038** | 0.0055 | 723 | 331 | 488 | 1.46× faster |
+| dense-unique | **0.0051** | 0.0060 | 84.9 | 66.0 | 41.2 | 1.18× faster |
+| sparse-unique | **0.0051** | 0.0060 | 63.6 | 31.4 | 23.3 | 1.19× faster |
+| dense-shared | **0.0047** | 0.0060 | 74.5 | 68.6 | 40.2 | 1.30× faster |
+| lookup | **0.0041** | 0.0045 | 219 | 269 | 81.2 | 1.10× faster |
+| canada | **0.0067** | 0.0079 | 1,382 | 672 | 552 | 1.18× faster |
 
 ### gcc 15.2 (µs, lower is better)
 
@@ -201,71 +201,71 @@ Tessera and FlatBuffers read the buffer where it lies. The parsers are each set 
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **9.36** | 40.7 | 135 | 259 | 263 | 4.35× faster |
-| monsters | **33.1** | 81.7 | 232 | 264 | 564 | 2.47× faster |
-| records | **13.0** | 245 | 369 | 210 | 273 | 18.85× faster |
-| series | **41.5** | 151 | 569 | 290 | 1,374 | 3.65× faster |
-| dense-unique | **7.66** | 26.7 | 68.3 | 53.5 | 121 | 3.48× faster |
-| sparse-unique | **4.45** | 17.5 | 46.9 | 27.7 | 76.7 | 3.94× faster |
-| dense-shared | **7.63** | 26.7 | 58.9 | 54.2 | 115 | 3.50× faster |
-| lookup | **20.5** | 50.0 | 182 | 242 | 290 | 2.44× faster |
-| canada | **0.86** | 2.46 | 987 | 550 | 2,688 | 2.86× faster |
+| prefab | **9.70** | 41.7 | 137 | 267 | 270 | 4.30× faster |
+| monsters | **33.8** | 83.2 | 240 | 272 | 581 | 2.46× faster |
+| records | **13.7** | 251 | 376 | 215 | 277 | 18.39× faster |
+| series | **42.8** | 156 | 592 | 305 | 1,413 | 3.64× faster |
+| dense-unique | **7.76** | 27.1 | 70.2 | 55.3 | 125 | 3.50× faster |
+| sparse-unique | **4.55** | 18.1 | 47.2 | 28.5 | 79.8 | 3.98× faster |
+| dense-shared | **7.74** | 27.7 | 60.7 | 55.9 | 118 | 3.59× faster |
+| lookup | **20.9** | 50.9 | 186 | 253 | 299 | 2.44× faster |
+| canada | **0.89** | 2.52 | 1,022 | 609 | 2,841 | 2.84× faster |
 
 **Full traversal of every field (MessagePack and Protobuf: over the already parsed tree)**
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | 20.0 | **19.7** | 18.9 | 18.2 |  | 1.01× slower |
-| monsters | **36.1** | 40.0 | 36.5 | 36.1 |  | 1.11× faster |
-| records | **108** | 130 | 114 | 84.9 |  | 1.20× faster |
-| series | **92.8** | 93.5 | 97.8 | 97.9 |  | 1.01× faster |
-| dense-unique | 11.0 | **11.0** | 11.0 | 10.9 |  | 1.00× slower |
-| sparse-unique | **8.43** | 8.48 | 8.52 | 8.40 |  | 1.01× faster |
-| dense-shared | **10.9** | 10.9 | 11.0 | 10.9 |  | 1.00× faster |
-| lookup | **29.2** | 29.4 | 29.4 | 29.1 |  | 1.01× faster |
-| canada | 108 | **108** | 113 | 109 |  | 1.00× slower |
+| prefab | 20.4 | **20.1** | 19.2 | 18.7 |  | 1.01× slower |
+| monsters | **36.8** | 41.3 | 37.3 | 36.6 |  | 1.12× faster |
+| records | **110** | 131 | 118 | 86.2 |  | 1.19× faster |
+| series | **94.2** | 95.5 | 106 | 99.1 |  | 1.01× faster |
+| dense-unique | **11.0** | 11.2 | 11.2 | 11.1 |  | 1.01× faster |
+| sparse-unique | 8.62 | **8.53** | 8.66 | 8.54 |  | 1.01× slower |
+| dense-shared | 11.1 | **11.1** | 11.1 | 11.1 |  | 1.00× slower |
+| lookup | **29.3** | 29.9 | 29.7 | 29.5 |  | 1.02× faster |
+| canada | 110 | **110** | 125 | 116 |  | 1.00× slower |
 
 **Verify + full traversal (safe end-to-end read)**
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **29.9** | 63.3 | 157 | 284 | 411 | 2.12× faster |
-| monsters | **73.8** | 126 | 274 | 306 | 842 | 1.70× faster |
-| records | **131** | 367 | 492 | 302 | 707 | 2.80× faster |
-| series | **134** | 250 | 679 | 389 | 1,881 | 1.86× faster |
-| dense-unique | **18.5** | 37.6 | 79.6 | 63.9 | 182 | 2.04× faster |
-| sparse-unique | **13.0** | 26.5 | 55.8 | 36.0 | 120 | 2.04× faster |
-| dense-shared | **18.5** | 37.8 | 69.9 | 65.1 | 172 | 2.04× faster |
-| lookup | **49.3** | 79.8 | 213 | 271 | 345 | 1.62× faster |
-| canada | **110** | 112 | 1,115 | 658 | 2,765 | 1.02× faster |
+| prefab | **31.0** | 64.1 | 163 | 287 | 420 | 2.07× faster |
+| monsters | **75.8** | 129 | 288 | 312 | 857 | 1.70× faster |
+| records | **134** | 373 | 504 | 309 | 731 | 2.78× faster |
+| series | **138** | 253 | 709 | 402 | 1,934 | 1.84× faster |
+| dense-unique | **18.9** | 38.6 | 81.2 | 67.5 | 189 | 2.04× faster |
+| sparse-unique | **13.2** | 27.2 | 56.8 | 37.3 | 124 | 2.07× faster |
+| dense-shared | **18.9** | 38.9 | 72.5 | 66.9 | 179 | 2.05× faster |
+| lookup | **50.4** | 81.3 | 216 | 279 | 352 | 1.61× faster |
+| canada | **111** | 115 | 1,203 | 732 | 2,850 | 1.04× faster |
 
 **1000 random element reads (MessagePack and Protobuf: on the parsed tree)**
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **3.95** | 4.13 | 3.67 | 4.92 |  | 1.05× faster |
-| monsters | **3.86** | 4.96 | 5.04 | 5.87 |  | 1.28× faster |
-| records | **3.70** | 4.04 | 5.22 | 3.30 |  | 1.09× faster |
-| series | **3.16** | 3.74 | 2.22 | 2.86 |  | 1.19× faster |
-| dense-unique | **3.73** | 3.81 | 3.17 | 3.96 |  | 1.02× faster |
-| sparse-unique | **2.11** | 2.52 | 2.72 | 3.33 |  | 1.19× faster |
-| dense-shared | **3.57** | 3.61 | 3.21 | 3.54 |  | 1.01× faster |
-| lookup | **2.37** | 2.76 | 1.84 | 4.42 |  | 1.16× faster |
-| canada | **3.66** | 7.74 | 2.44 | 4.99 |  | 2.12× faster |
+| prefab | **4.03** | 4.25 | 3.91 | 5.38 |  | 1.06× faster |
+| monsters | **4.02** | 4.85 | 5.20 | 5.99 |  | 1.21× faster |
+| records | **3.61** | 3.72 | 5.25 | 3.49 |  | 1.03× faster |
+| series | **3.27** | 3.83 | 2.28 | 2.93 |  | 1.17× faster |
+| dense-unique | **3.84** | 4.30 | 3.40 | 3.78 |  | 1.12× faster |
+| sparse-unique | **2.20** | 2.55 | 2.51 | 3.18 |  | 1.16× faster |
+| dense-shared | **3.60** | 3.70 | 3.49 | 3.46 |  | 1.03× faster |
+| lookup | **2.43** | 2.81 | 2.03 | 4.40 |  | 1.16× faster |
+| canada | **3.96** | 7.98 | 2.30 | 5.24 |  | 2.02× faster |
 
 **Open + read one field (the parsers parse first)**
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **0.0049** | 0.0060 | 136 | 261 | 130 | 1.23× faster |
-| monsters | **0.0051** | 0.0068 | 232 | 267 | 193 | 1.33× faster |
-| records | **0.0039** | 0.0050 | 371 | 209 | 87.5 | 1.26× faster |
-| series | **0.0042** | 0.0046 | 576 | 292 | 583 | 1.10× faster |
-| dense-unique | **0.0049** | 0.0067 | 68.7 | 53.4 | 54.6 | 1.37× faster |
-| sparse-unique | **0.0049** | 0.0067 | 47.4 | 27.8 | 31.3 | 1.37× faster |
-| dense-shared | **0.0045** | 0.0067 | 58.7 | 54.2 | 53.2 | 1.49× faster |
-| lookup | **0.0035** | 0.0048 | 182 | 242 | 102 | 1.36× faster |
-| canada | **0.0070** | 0.0103 | 987 | 550 | 657 | 1.46× faster |
+| prefab | **0.0050** | 0.0061 | 140 | 269 | 132 | 1.21× faster |
+| monsters | **0.0052** | 0.0070 | 241 | 272 | 198 | 1.35× faster |
+| records | **0.0040** | 0.0051 | 379 | 215 | 90.5 | 1.26× faster |
+| series | **0.0034** | 0.0048 | 589 | 308 | 601 | 1.43× faster |
+| dense-unique | **0.0050** | 0.0068 | 70.6 | 56.5 | 55.6 | 1.38× faster |
+| sparse-unique | **0.0050** | 0.0069 | 47.7 | 28.4 | 31.8 | 1.38× faster |
+| dense-shared | **0.0046** | 0.0068 | 60.8 | 56.5 | 54.1 | 1.48× faster |
+| lookup | **0.0036** | 0.0049 | 186 | 251 | 104 | 1.35× faster |
+| canada | **0.0071** | 0.0105 | 1,028 | 606 | 698 | 1.48× faster |
 
 ### msvc 19.42.34444 (µs, lower is better)
 
@@ -273,71 +273,71 @@ Tessera and FlatBuffers read the buffer where it lies. The parsers are each set 
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **15.5** | 38.5 | 229 | 328 | 304 | 2.48× faster |
-| monsters | **36.3** | 69.0 | 368 | 357 | 618 | 1.90× faster |
-| records | **20.9** | 259 | 618 | 252 | 301 | 12.41× faster |
-| series | **68.8** | 196 | 962 | 535 | 1,502 | 2.85× faster |
-| dense-unique | **10.9** | 18.2 | 119 | 87.5 | 144 | 1.67× faster |
-| sparse-unique | **6.53** | 17.1 | 80.6 | 44.2 | 88.7 | 2.62× faster |
-| dense-shared | **11.0** | 18.2 | 88.2 | 89.0 | 137 | 1.66× faster |
-| lookup | **24.6** | 56.3 | 299 | 364 | 317 | 2.29× faster |
-| canada | **1.00** | 2.99 | 1,692 | 1,086 | 2,870 | 2.98× faster |
+| prefab | **15.8** | 39.0 | 240 | 383 | 307 | 2.47× faster |
+| monsters | **36.8** | 70.1 | 392 | 425 | 627 | 1.91× faster |
+| records | **21.2** | 263 | 639 | 271 | 302 | 12.40× faster |
+| series | **69.8** | 195 | 1,117 | 643 | 1,525 | 2.80× faster |
+| dense-unique | **11.0** | 18.5 | 129 | 108 | 146 | 1.68× faster |
+| sparse-unique | **6.60** | 17.3 | 88.3 | 51.0 | 89.4 | 2.62× faster |
+| dense-shared | **11.0** | 18.5 | 94.8 | 110 | 140 | 1.68× faster |
+| lookup | **25.1** | 57.3 | 361 | 451 | 322 | 2.28× faster |
+| canada | **1.03** | 3.02 | 1,735 | 1,223 | 2,917 | 2.94× faster |
 
 **Full traversal of every field (MessagePack and Protobuf: over the already parsed tree)**
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **18.6** | 19.8 | 19.4 | 18.5 |  | 1.07× faster |
-| monsters | **39.2** | 44.3 | 37.1 | 36.7 |  | 1.13× faster |
-| records | **140** | 285 | 117 | 106 |  | 2.03× faster |
-| series | **98.0** | 98.7 | 96.4 | 95.6 |  | 1.01× faster |
-| dense-unique | **10.8** | 11.3 | 10.8 | 10.8 |  | 1.04× faster |
-| sparse-unique | **8.43** | 8.90 | 8.43 | 8.30 |  | 1.06× faster |
-| dense-shared | **10.9** | 11.3 | 10.8 | 10.8 |  | 1.04× faster |
-| lookup | **28.7** | 28.9 | 28.8 | 28.7 |  | 1.01× faster |
-| canada | **106** | 106 | 108 | 109 |  | 1.00× faster |
+| prefab | **18.9** | 20.3 | 19.5 | 18.9 |  | 1.07× faster |
+| monsters | **39.5** | 45.2 | 37.7 | 37.1 |  | 1.14× faster |
+| records | **141** | 287 | 121 | 107 |  | 2.03× faster |
+| series | **98.7** | 99.6 | 101 | 96.6 |  | 1.01× faster |
+| dense-unique | **11.0** | 11.4 | 10.9 | 10.9 |  | 1.04× faster |
+| sparse-unique | **8.57** | 8.98 | 8.54 | 8.39 |  | 1.05× faster |
+| dense-shared | **11.0** | 11.4 | 10.9 | 10.9 |  | 1.04× faster |
+| lookup | **28.9** | 29.3 | 28.9 | 28.8 |  | 1.02× faster |
+| canada | **107** | 107 | 119 | 112 |  | 1.00× faster |
 
 **Verify + full traversal (safe end-to-end read)**
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **35.1** | 61.8 | 249 | 351 | 822 | 1.76× faster |
-| monsters | **81.2** | 117 | 413 | 405 | 1,485 | 1.45× faster |
-| records | **167** | 555 | 743 | 372 | 933 | 3.32× faster |
-| series | **167** | 294 | 1,068 | 616 | 3,700 | 1.76× faster |
-| dense-unique | **21.8** | 29.6 | 130 | 98.2 | 405 | 1.36× faster |
-| sparse-unique | **14.9** | 26.0 | 89.5 | 52.4 | 247 | 1.74× faster |
-| dense-shared | **21.8** | 29.7 | 101 | 100 | 409 | 1.36× faster |
-| lookup | **53.3** | 85.8 | 328 | 395 | 731 | 1.61× faster |
-| canada | **107** | 110 | 1,838 | 1,186 | 6,014 | 1.03× faster |
+| prefab | **35.7** | 63.1 | 261 | 409 | 830 | 1.77× faster |
+| monsters | **82.4** | 120 | 437 | 475 | 1,507 | 1.46× faster |
+| records | **168** | 560 | 772 | 392 | 1,018 | 3.33× faster |
+| series | **169** | 295 | 1,252 | 752 | 3,746 | 1.75× faster |
+| dense-unique | **22.0** | 30.0 | 139 | 121 | 409 | 1.36× faster |
+| sparse-unique | **15.2** | 26.2 | 96.6 | 60.4 | 248 | 1.72× faster |
+| dense-shared | **22.0** | 29.9 | 106 | 120 | 412 | 1.36× faster |
+| lookup | **54.1** | 86.6 | 392 | 494 | 738 | 1.60× faster |
+| canada | **108** | 111 | 1,906 | 1,348 | 6,079 | 1.03× faster |
 
 **1000 random element reads (MessagePack and Protobuf: on the parsed tree)**
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **5.33** | 7.47 | 4.85 | 5.86 |  | 1.40× faster |
-| monsters | **5.20** | 9.34 | 7.18 | 7.28 |  | 1.79× faster |
-| records | **4.88** | 6.02 | 5.35 | 5.86 |  | 1.23× faster |
-| series | **3.61** | 4.07 | 2.33 | 3.15 |  | 1.13× faster |
-| dense-unique | **4.61** | 5.49 | 3.24 | 4.14 |  | 1.19× faster |
-| sparse-unique | **3.57** | 4.87 | 4.27 | 3.65 |  | 1.37× faster |
-| dense-shared | **4.98** | 5.66 | 3.14 | 4.37 |  | 1.14× faster |
-| lookup | **2.14** | 3.44 | 1.76 | 4.47 |  | 1.61× faster |
-| canada | **6.67** | 7.95 | 2.07 | 6.91 |  | 1.19× faster |
+| prefab | **5.45** | 7.62 | 4.91 | 6.01 |  | 1.40× faster |
+| monsters | **5.29** | 9.46 | 7.34 | 7.43 |  | 1.79× faster |
+| records | **5.01** | 6.28 | 5.46 | 5.88 |  | 1.25× faster |
+| series | **3.68** | 4.21 | 2.43 | 3.10 |  | 1.15× faster |
+| dense-unique | **4.71** | 5.57 | 3.13 | 4.32 |  | 1.18× faster |
+| sparse-unique | **3.62** | 4.93 | 4.23 | 3.76 |  | 1.36× faster |
+| dense-shared | **5.04** | 5.75 | 3.16 | 4.43 |  | 1.14× faster |
+| lookup | **2.06** | 3.31 | 1.82 | 4.56 |  | 1.61× faster |
+| canada | **6.69** | 8.07 | 2.13 | 7.02 |  | 1.21× faster |
 
 **Open + read one field (the parsers parse first)**
 
 | Workload | Tessera | FlatBuffers | MessagePack | Protobuf | JSON | Tessera vs FlatBuffers |
 |---|---:|---:|---:|---:|---:|---:|
-| prefab | **0.0057** | 0.0082 | 228 | 332 | 308 | 1.45× faster |
-| monsters | **0.0057** | 0.0089 | 367 | 357 | 191 | 1.55× faster |
-| records | **0.0056** | 0.0079 | 617 | 252 | 90.2 | 1.41× faster |
-| series | **0.0036** | 0.0047 | 956 | 530 | 587 | 1.30× faster |
-| dense-unique | **0.0059** | 0.0078 | 119 | 86.9 | 56.0 | 1.32× faster |
-| sparse-unique | **0.0059** | 0.0078 | 80.9 | 44.1 | 36.3 | 1.32× faster |
-| dense-shared | **0.0055** | 0.0078 | 87.9 | 88.7 | 55.1 | 1.40× faster |
-| lookup | **0.0047** | 0.0052 | 300 | 364 | 128 | 1.10× faster |
-| canada | **0.0075** | 0.0107 | 1,696 | 1,135 | 1,057 | 1.43× faster |
+| prefab | **0.0057** | 0.0082 | 240 | 388 | 307 | 1.43× faster |
+| monsters | **0.0058** | 0.0090 | 392 | 427 | 193 | 1.55× faster |
+| records | **0.0057** | 0.0080 | 640 | 271 | 90.3 | 1.40× faster |
+| series | **0.0037** | 0.0048 | 1,117 | 649 | 598 | 1.31× faster |
+| dense-unique | **0.0059** | 0.0079 | 130 | 107 | 56.8 | 1.32× faster |
+| sparse-unique | **0.0060** | 0.0079 | 88.3 | 51.0 | 36.3 | 1.32× faster |
+| dense-shared | **0.0065** | 0.0079 | 94.8 | 110 | 56.4 | 1.21× faster |
+| lookup | **0.0047** | 0.0052 | 357 | 459 | 129 | 1.11× faster |
+| canada | **0.0076** | 0.0109 | 1,731 | 1,220 | 1,069 | 1.43× faster |
 
 ## Dictionary lookups (µs per 1,000 lookups, lower is better)
 
@@ -347,17 +347,17 @@ The lookup workload: a `Dictionary<string, Stock>` and a `Dictionary<int, double
 
 | Compiler | Tessera | FlatBuffers | MessagePack | Protobuf |
 |---|---:|---:|---:|---:|
-| clang 19.1 | **138** | 219 | 10,618 | 10,335 |
-| gcc 15.2 | **131** | 160 | 7,906 | 8,661 |
-| msvc 19.42.34444 | **134** | 190 | 8,031 | 10,863 |
+| clang 19.1 | **117** | 190 | 8,003 | 7,773 |
+| gcc 15.2 | **134** | 163 | 8,152 | 8,826 |
+| msvc 19.42.34444 | **152** | 203 | 10,864 | 14,205 |
 
 **By int**
 
 | Compiler | Tessera | FlatBuffers | MessagePack | Protobuf |
 |---|---:|---:|---:|---:|
-| clang 19.1 | **39.7** | 128 | 828 | 1,339 |
-| gcc 15.2 | **49.0** | 78.4 | 1,114 | 1,377 |
-| msvc 19.42.34444 | **49.1** | 113 | 1,200 | 1,306 |
+| clang 19.1 | **39.1** | 109 | 828 | 1,298 |
+| gcc 15.2 | **49.7** | 80.4 | 1,140 | 1,406 |
+| msvc 19.42.34444 | **49.6** | 132 | 1,248 | 1,344 |
 
 ## Fixed cells: the series workload with `[TesseraKeepDefault]`
 
@@ -366,18 +366,18 @@ The same data in a model whose always-set members are marked `[TesseraKeepDefaul
 |  | Tessera | Tessera (fixed) | Change |
 |---|---:|---:|---:|
 | Size (bytes) | 581,288 | 581,296 | +0.0% |
-| .NET write (µs) | 304 | 268 | −11.9% |
-| C++ verify, clang 19.1 (µs) | 69.5 | 65.5 | −5.8% |
-| C++ full traversal, clang 19.1 (µs) | 96.1 | 96.0 | −0.1% |
-| C++ verify + traversal, clang 19.1 (µs) | 166 | 161 | −2.7% |
-| C++ random access, clang 19.1 (µs) | 3.41 | 2.74 | −19.5% |
-| C++ verify, gcc 15.2 (µs) | 41.5 | 41.2 | −0.8% |
-| C++ full traversal, gcc 15.2 (µs) | 92.8 | 92.7 | −0.1% |
-| C++ verify + traversal, gcc 15.2 (µs) | 134 | 134 | −0.3% |
-| C++ random access, gcc 15.2 (µs) | 3.16 | 2.11 | −33.3% |
-| C++ verify, msvc 19.42.34444 (µs) | 68.8 | 68.2 | −0.9% |
-| C++ full traversal, msvc 19.42.34444 (µs) | 98.0 | 95.7 | −2.3% |
-| C++ verify + traversal, msvc 19.42.34444 (µs) | 167 | 164 | −1.8% |
-| C++ random access, msvc 19.42.34444 (µs) | 3.61 | 2.38 | −34.1% |
+| .NET write (µs) | 195 | 174 | −10.7% |
+| C++ verify, clang 19.1 (µs) | 69.0 | 64.3 | −6.8% |
+| C++ full traversal, clang 19.1 (µs) | 95.7 | 95.6 | −0.1% |
+| C++ verify + traversal, clang 19.1 (µs) | 165 | 160 | −2.8% |
+| C++ random access, clang 19.1 (µs) | 3.38 | 2.70 | −20.2% |
+| C++ verify, gcc 15.2 (µs) | 42.8 | 42.7 | −0.4% |
+| C++ full traversal, gcc 15.2 (µs) | 94.2 | 93.5 | −0.7% |
+| C++ verify + traversal, gcc 15.2 (µs) | 138 | 136 | −1.2% |
+| C++ random access, gcc 15.2 (µs) | 3.27 | 2.27 | −30.6% |
+| C++ verify, msvc 19.42.34444 (µs) | 69.8 | 69.0 | −1.1% |
+| C++ full traversal, msvc 19.42.34444 (µs) | 98.7 | 96.1 | −2.7% |
+| C++ verify + traversal, msvc 19.42.34444 (µs) | 169 | 165 | −1.9% |
+| C++ random access, msvc 19.42.34444 (µs) | 3.68 | 2.44 | −33.7% |
 
 Raw samples, MAD and the exact settings are in [benchmarks/](benchmarks/) (`*.json`, copied from `benchmarks/results` by `scripts/bench.ps1`, which reproduces everything).

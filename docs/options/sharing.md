@@ -37,8 +37,8 @@ Buffer sizes from the [benchmarks](../BENCHMARKS.md), in bytes:
 | scene of 1,024 nodes, copies of 16 distinct nodes | 65,080 | 52,984 | 5,352 |
 | 20,000 time-series samples, no repeated strings | 581,288 | 581,288 | 581,288 |
 
-Saving time, against the default: `None` was up to 30% faster where strings repeat (the same where they don't), and
-`All` took 1.3 to 3.6 times as long. The [benchmark results](../BENCHMARKS.md) have the current times for every case
+Saving time, against the default: `None` was up to 31% faster, most where every string is unique (it was 7% slower
+on the records, whose buffer sharing makes 26% smaller), and `All` took 1.7 to 4.1 times as long. The [benchmark results](../BENCHMARKS.md) have the current times for every case
 (the "Tessera (no sharing)" and "Tessera (full sharing)" columns).
 
 ## `Sharing.None`
