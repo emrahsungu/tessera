@@ -48,7 +48,7 @@ public class GeneratorTests
             """);
         Assert.Empty(r.Diagnostics);
         // Tessera.Defaults.g.cs records the initializer defaults (Kind.B, true) for generators of other assemblies.
-        Assert.Equal(new[] { "Tessera.CppHeader.g.cs", "Tessera.Defaults.g.cs", "Tessera.Views.g.cs", "Tessera.Writers.g.cs" }, r.Sources.Select(s => s.HintName).OrderBy(x => x, StringComparer.Ordinal));
+        Assert.Equal(new[] { "Tessera.CppHeader.g.cs", "Tessera.Defaults.g.cs", "Tessera.Deserializers.g.cs", "Tessera.Views.g.cs", "Tessera.Writers.g.cs" }, r.Sources.Select(s => s.HintName).OrderBy(x => x, StringComparer.Ordinal));
         AssertCompilesCleanly(r);
         Assert.Equal("Models.tessera.hpp", r.HeaderName);
         string h = r.Header;

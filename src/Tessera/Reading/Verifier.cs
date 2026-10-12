@@ -73,21 +73,26 @@ public ref struct TesseraVerifier
         _utf8Left = 16L * buffer.Length + 65536;
     }
 
-    /// <summary>Checks the buffer's top-level object, at <paramref name="root"/>, with its type's generated check.</summary>
-    internal static TesseraReadError Check(ReadOnlySpan<byte> buffer, int root, TesseraReadOptions options, TesseraVerifyFunc verify)
+    /// <summary>
+    /// Checks the buffer's top-level object, at <paramref name="root"/>, with its type's generated check;
+    /// <paramref name="shared"/> says whether the buffer shares items so often that it was checked once per item.
+    /// </summary>
+    internal static TesseraReadError Check(ReadOnlySpan<byte> buffer, int root, TesseraReadOptions options, TesseraVerifyFunc verify, out bool shared)
     {
         var v = new TesseraVerifier(buffer, null, options);
         bool ok = verify(ref v, root, 0);
         if (!ok && v.Shared) ok = v.StartOnce() && verify(ref v, root, 0);
+        shared = v._memo != null;
         return ok ? TesseraReadError.None : v._error;
     }
 
     /// <summary>Checks the buffer's top-level object, at <paramref name="root"/>, against <paramref name="schema"/>.</summary>
-    internal static TesseraReadError Check(ReadOnlySpan<byte> buffer, ReadSchema schema, int root, TesseraReadOptions options)
+    internal static TesseraReadError Check(ReadOnlySpan<byte> buffer, ReadSchema schema, int root, TesseraReadOptions options, out bool shared)
     {
         var v = new TesseraVerifier(buffer, schema, options);
         bool ok = v.Object(schema.Root, root, 0);
         if (!ok && v.Shared) ok = v.StartOnce() && v.Object(schema.Root, root, 0);
+        shared = v._memo != null;
         return ok ? TesseraReadError.None : v._error;
     }
 

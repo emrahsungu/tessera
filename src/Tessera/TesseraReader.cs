@@ -37,61 +37,54 @@ public static class TesseraReader
     public static ref readonly byte Open(ReadOnlySpan<byte> buffer, TesseraType root, TesseraVerifyFunc verify, TesseraReadOptions? options,
         out TesseraReadError error)
     {
-        options ??= TesseraReadOptions.Default;
-        error = CheckHeader(buffer, out int rootAt);
-        if (error != TesseraReadError.None) return ref Zeros;
+        error = Open(buffer, root, verify, options ?? TesseraReadOptions.Default, out ReadOnlySpan<byte> data, out int rootAt, out _);
+        return ref error == TesseraReadError.None ? ref Unsafe.Add(ref MemoryMarshal.GetReference(data), rootAt) : ref Zeros;
+    }
+
+    /// <summary>
+    /// Checks <paramref name="buffer"/> as <see cref="Open(ReadOnlySpan{byte}, TesseraType, TesseraVerifyFunc, TesseraReadOptions?, out TesseraReadError)"/>
+    /// does. <paramref name="data"/> is the buffer to read (a translated copy for other versions of the classes), with
+    /// the top-level object at <paramref name="rootAt"/>; <paramref name="shared"/> says whether the check found that the
+    /// buffer shares items so often that it checked each once.
+    /// </summary>
+    internal static TesseraReadError Open(ReadOnlySpan<byte> buffer, TesseraType root, TesseraVerifyFunc verify, TesseraReadOptions options,
+        out ReadOnlySpan<byte> data, out int rootAt, out bool shared)
+    {
+        data = buffer;
+        shared = false;
+        TesseraReadError error = CheckHeader(buffer, out rootAt);
+        if (error != TesseraReadError.None) return error;
         if (BinaryPrimitives.ReadUInt64LittleEndian(buffer.Slice(8)) == root.DeepFingerprint)
         {
-            if (options.Verify)
-            {
-                error = TesseraVerifier.Check(buffer, rootAt, options, verify);
-                if (error != TesseraReadError.None) return ref Zeros;
-            }
-
-            return ref Unsafe.Add(ref MemoryMarshal.GetReference(buffer), rootAt);
+            return options.Verify ? TesseraVerifier.Check(buffer, rootAt, options, verify, out shared) : TesseraReadError.None;
         }
 
-        return ref OpenOther(buffer, root, rootAt, options, out error);
+        return OpenOther(buffer, root, options, ref data, ref rootAt, out shared);
     }
 
     /// <summary>A buffer written with other versions of the classes.</summary>
-    private static ref readonly byte OpenOther(ReadOnlySpan<byte> buffer, TesseraType root, int rootAt, TesseraReadOptions options,
-        out TesseraReadError error)
+    private static TesseraReadError OpenOther(ReadOnlySpan<byte> buffer, TesseraType root, TesseraReadOptions options, ref ReadOnlySpan<byte> data,
+        ref int rootAt, out bool shared)
     {
-        error = TesseraReadError.None;
-        ReadSchema reader = root.ReadSchema ??= ReadSchema.FromTypes(root);
+        shared = false;
 
         // Written with other versions of the classes: matched member by member, by name, through the schema section the
         // buffer carries, checked against that schema, and translated once into this program's layout.
-        if ((buffer[7] & WireFormat.FlagSchema) == 0)
-        {
-            error = TesseraReadError.SchemaMismatch;
-            return ref Zeros;
-        }
-
-        if (!ReadSchema.TryParseSection(buffer, out ReadSchema writer))
-        {
-            error = TesseraReadError.BadSchema;
-            return ref Zeros;
-        }
-
+        if ((buffer[7] & WireFormat.FlagSchema) == 0) return TesseraReadError.SchemaMismatch;
+        if (!ReadSchema.TryParseSection(buffer, out ReadSchema writer)) return TesseraReadError.BadSchema;
+        ReadSchema reader = root.ReadSchema ??= ReadSchema.FromTypes(root);
         Binding? binding = new Binder(reader, writer).Bind(reader.Root, writer.Root);
-        if (binding == Binding.Incompatible)
-        {
-            error = TesseraReadError.SchemaMismatch;
-            return ref Zeros;
-        }
-
+        if (binding == Binding.Incompatible) return TesseraReadError.SchemaMismatch;
         if (options.Verify)
         {
-            error = TesseraVerifier.Check(buffer, writer, rootAt, options);
-            if (error != TesseraReadError.None) return ref Zeros;
+            TesseraReadError error = TesseraVerifier.Check(buffer, writer, rootAt, options, out shared);
+            if (error != TesseraReadError.None) return error;
         }
 
         // The same layout throughout, though the fingerprints differ: read in place.
-        if (binding == null) return ref Unsafe.Add(ref MemoryMarshal.GetReference(buffer), rootAt);
-        byte[] translated = Translator.Translate(buffer, reader, rootAt, binding, out int translatedRoot);
-        return ref translated[translatedRoot];
+        if (binding == null) return TesseraReadError.None;
+        data = Translator.Translate(buffer, reader, rootAt, binding, out rootAt);
+        return TesseraReadError.None;
     }
 
     /// <summary>Checks the 16-byte header; <paramref name="root"/> is the top-level object's position.</summary>

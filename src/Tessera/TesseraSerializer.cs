@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 
 namespace Tessera;
@@ -16,12 +17,26 @@ public static class TesseraModel<T>
     /// <summary>Schema entry for <typeparamref name="T"/>.</summary>
     public static TesseraType? Type { get; private set; }
 
+    /// <summary>Generated check of buffers holding a <typeparamref name="T"/>, written with these classes.</summary>
+    public static TesseraVerifyFunc? Verify { get; private set; }
+
+    /// <summary>Generated code that creates a <typeparamref name="T"/> from a buffer.</summary>
+    public static TesseraDeserializeFunc<T>? Read { get; private set; }
+
     /// <summary>Called by generated module initializers.</summary>
     public static void Register(TesseraWriteFunc<T> write, TesseraType type)
     {
         Write = write;
         Type = type;
         TesseraSerializer.CountRegistration();
+    }
+
+    /// <summary>Called by generated module initializers.</summary>
+    public static void RegisterRead(TesseraType type, TesseraVerifyFunc verify, TesseraDeserializeFunc<T> read)
+    {
+        Type ??= type;
+        Verify = verify;
+        Read = read;
     }
 }
 
@@ -60,6 +75,45 @@ public static class TesseraSerializer
         return writer.Finish(root, TesseraModel<T>.Type!);
     }
 
+    /// <summary>
+    /// Creates the <typeparamref name="T"/> that <paramref name="buffer"/> holds, after checking the buffer (unless
+    /// <see cref="TesseraReadOptions.Verify"/> is off). A buffer written with other versions of the classes is read by
+    /// matching members by name. To read a buffer without creating objects, use the generated read type
+    /// (<c>MonsterView.Read(buffer)</c> for a class <c>Monster</c>).
+    /// </summary>
+    /// <remarks>
+    /// Members are set as they were written: through a constructor whose parameters have the members' names when the
+    /// class has no constructor without parameters, and otherwise directly, including members with private or init-only
+    /// setters and read-only fields. A member that was not stored gets its declared default (null for references).
+    /// Lists and dictionaries are created as their declared types.
+    /// </remarks>
+    /// <exception cref="TesseraReadException">The buffer cannot be read; its <c>Error</c> says why.</exception>
+    public static T Deserialize<T>(ReadOnlySpan<byte> buffer, TesseraReadOptions? options = null)
+    {
+        if (!TryDeserialize(buffer, out T? value, out TesseraReadError error, options)) throw new TesseraReadException(error);
+        return value!;
+    }
+
+    /// <summary>
+    /// Like <see cref="Deserialize{T}(ReadOnlySpan{byte}, TesseraReadOptions?)"/>, but returns false and the reason
+    /// instead of throwing when the buffer cannot be read.
+    /// </summary>
+    public static bool TryDeserialize<T>(ReadOnlySpan<byte> buffer, [MaybeNullWhen(false)] out T value, out TesseraReadError error,
+        TesseraReadOptions? options = null)
+    {
+        TesseraDeserializeFunc<T> read = TesseraModel<T>.Read ?? throw NoReader(typeof(T));
+        error = TesseraReader.Open(buffer, TesseraModel<T>.Type!, TesseraModel<T>.Verify!, options ?? TesseraReadOptions.Default,
+            out ReadOnlySpan<byte> data, out int root, out bool shared);
+        if (error != TesseraReadError.None)
+        {
+            value = default;
+            return false;
+        }
+
+        value = TesseraDeserializer.Run(data, root, shared, read);
+        return true;
+    }
+
     /// <summary>Writers registered by generated code so far, from every loaded assembly.</summary>
     private static int s_registered;
 
@@ -75,6 +129,14 @@ public static class TesseraSerializer
         : $"No serializer was generated for {type}. The source generator (Tessera.Generator) writes one for a class when it has [Tessera], is " +
           "listed in [assembly: TesseraRoot(typeof(...))], or is saved with its real type somewhere in its project; it cannot see calls through " +
           "generic code (Serialize<T> with a type parameter). If the project that saves it does not run the generator, " + AddGenerator);
+
+    private static TesseraException NoReader(Type type) => new(Volatile.Read(ref s_registered) == 0
+        ? $"No deserializer was generated for {type}, and no Tessera serializers are loaded at all: the source generator (Tessera.Generator) " +
+          "did not run. To run it, " + AddGenerator
+        : $"No deserializer was generated for {type}. The source generator (Tessera.Generator) writes one for a class when it has [Tessera], " +
+          "is listed in [assembly: TesseraRoot(typeof(...))], or is saved or read with its real type somewhere in its project; it cannot see " +
+          "calls through generic code (Deserialize<T> with a type parameter), and abstract classes and interfaces are read through the class " +
+          "that holds them. If the project that reads it does not run the generator, " + AddGenerator);
 
     private static TesseraWriter Rent(TesseraOptions? options)
     {
