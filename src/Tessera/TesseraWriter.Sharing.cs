@@ -106,28 +106,44 @@ public sealed partial class TesseraWriter
     // predicted, so chosen strings cannot pile up in one place.
     private static readonly ulong s_stringSeed = (ulong)Random.Shared.NextInt64();
 
-    /// <summary>A hash of the string's UTF-16 code units, 8 bytes at a time.</summary>
+    /// <summary>
+    /// A hash of the string's UTF-16 code units. Up to 8 chars, the usual case: its first and last 8 bytes (overlapping
+    /// when it is shorter) multiplied once. Longer strings take 16 bytes per step first.
+    /// </summary>
     private static int HashString(string value)
     {
-        const ulong k1 = 0xE7037ED1A0B428DBUL;
+        const ulong k1 = 0xE7037ED1A0B428DBUL, k2 = 0x8EBC6AF09C88C6E3UL;
         ref byte p = ref Unsafe.As<char, byte>(ref MemoryMarshal.GetReference(value.AsSpan()));
         int n = value.Length * 2;
-        ulong h = s_stringSeed ^ (ulong)n;
+        ulong seed = s_stringSeed ^ (ulong)n;
+        ulong a, b;
         if (n >= 8)
         {
-            // Every 8 bytes, the last 8 overlapping the ones before when the length is not a multiple of 8.
-            for (int i = 0; i < n - 8; i += 8) h = Mix(h ^ Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref p, i)), k1);
-            h = Mix(h ^ Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref p, n - 8)), k1);
+            if (n > 16)
+            {
+                for (int i = 0; i < n - 16; i += 16)
+                    seed = Mix(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref p, i)) ^ seed, Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref p, i + 8)) ^ k2);
+                a = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref p, n - 16));
+            }
+            else
+            {
+                a = Unsafe.ReadUnaligned<ulong>(ref p);
+            }
+
+            b = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref p, n - 8));
         }
         else if (n >= 4)
         {
-            h = Mix(h ^ Unsafe.ReadUnaligned<uint>(ref p) ^ (ulong)Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref p, n - 4)) << 32, k1);
+            a = Unsafe.ReadUnaligned<uint>(ref p);
+            b = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref p, n - 4));
         }
-        else if (n != 0)
+        else
         {
-            h = Mix(h ^ Unsafe.ReadUnaligned<ushort>(ref p), k1);
+            a = n != 0 ? Unsafe.ReadUnaligned<ushort>(ref p) : 0UL;
+            b = 0;
         }
 
+        ulong h = Mix(a ^ seed, b ^ k1);
         return (int)(h ^ (h >> 32));
     }
 
