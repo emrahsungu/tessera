@@ -33,7 +33,12 @@ constexpr std::uint64_t kAbsent = 0x9E3779B97F4A7C15ull;
 
 struct Checksum {
     std::uint64_t h = 0xCBF29CE484222325ull;
+    // Lengths of lists and dictionaries are summed apart from the chain, so the order does not matter: a JSON reader
+    // learns a length only after the elements, while the binary formats store it in front.
+    std::uint64_t counts = 0;
     BENCH_HELPER void mix(std::uint64_t v) noexcept { h = (h ^ v) * 0x100000001B3ull; }
+    BENCH_HELPER void n(std::uint64_t count) noexcept { counts += count; }
+    BENCH_HELPER std::uint64_t value() const noexcept { return h ^ (counts * 0x9E3779B97F4A7C15ull); }
     BENCH_HELPER void i(std::int64_t v) noexcept { mix(static_cast<std::uint64_t>(v)); }
     BENCH_HELPER void u(std::uint64_t v) noexcept { mix(v); }
     BENCH_HELPER void f(float v) noexcept { mix(std::bit_cast<std::uint32_t>(v)); }
@@ -63,7 +68,7 @@ BENCH_HELPER void str(Checksum& c, std::string_view s) {
 
 BENCH_HELPER void refs(Checksum& c, tessera::Vector<im::ObjectRef> v) {
     if (!v) { c.absent(); return; }
-    c.u(v.size());
+    c.n(v.size());
     for (im::ObjectRef r : v) ref(c, r);
 }
 
@@ -149,20 +154,20 @@ inline void component(Checksum& c, im::Component comp) {
 inline std::uint64_t prefab(im::Prefab p) {
     Checksum c;
     auto objects = p.objects();
-    if (!objects) { c.absent(); return c.h; }
-    c.u(objects.size());
+    if (!objects) { c.absent(); return c.value(); }
+    c.n(objects.size());
     for (im::PrefabObject o : objects) {
         str(c, o.name());
         auto comps = o.components();
         if (!comps) c.absent();
         else {
-            c.u(comps.size());
+            c.n(comps.size());
             for (im::Component comp : comps) component(c, comp);
         }
         auto children = o.children();
         if (!children) c.absent();
         else {
-            c.u(children.size());
+            c.n(children.size());
             for (std::int32_t ch : children) c.i(ch);
         }
         v4(c, o.rotation());
@@ -175,7 +180,7 @@ inline std::uint64_t prefab(im::Prefab p) {
         c.i(o.id());
         c.b(o.active());
     }
-    return c.h;
+    return c.value();
 }
 
 inline void weapon(Checksum& c, im::Weapon w) {
@@ -186,8 +191,8 @@ inline void weapon(Checksum& c, im::Weapon w) {
 inline std::uint64_t world(im::World w) {
     Checksum c;
     auto monsters = w.monsters();
-    if (!monsters) { c.absent(); return c.h; }
-    c.u(monsters.size());
+    if (!monsters) { c.absent(); return c.value(); }
+    c.n(monsters.size());
     for (im::Monster m : monsters) {
         str(c, m.name());
         c.i(m.hp());
@@ -198,13 +203,13 @@ inline std::uint64_t world(im::World w) {
         auto inv = m.inventory();
         if (!inv) c.absent();
         else {
-            c.u(inv.size());
+            c.n(inv.size());
             for (std::uint8_t x : inv) c.u(x);
         }
         auto weapons = m.weapons();
         if (!weapons) c.absent();
         else {
-            c.u(weapons.size());
+            c.n(weapons.size());
             for (im::Weapon x : weapons) weapon(c, x);
         }
         if (auto e = m.equipped()) weapon(c, e);
@@ -212,12 +217,12 @@ inline std::uint64_t world(im::World w) {
         auto path = m.path();
         if (!path) c.absent();
         else {
-            c.u(path.size());
+            c.n(path.size());
             for (im::Vec3 v : path) v3(c, v);
         }
         c.b(m.friendly());
     }
-    return c.h;
+    return c.value();
 }
 
 template <class T> BENCH_HELPER void opt(Checksum& c, std::optional<T> v) {
@@ -231,8 +236,8 @@ template <class T> BENCH_HELPER void opt(Checksum& c, std::optional<T> v) {
 inline std::uint64_t records(im::RecordSet s) {
     Checksum c;
     auto records = s.records();
-    if (!records) { c.absent(); return c.h; }
-    c.u(records.size());
+    if (!records) { c.absent(); return c.value(); }
+    c.n(records.size());
     for (im::Record x : records) {
         opt(c, x.i0()); opt(c, x.i1()); opt(c, x.i2()); opt(c, x.i3()); opt(c, x.i4()); opt(c, x.i5()); opt(c, x.i6()); opt(c, x.i7());
         opt(c, x.i8()); opt(c, x.i9()); opt(c, x.i10()); opt(c, x.i11()); opt(c, x.i12()); opt(c, x.i13()); opt(c, x.i14()); opt(c, x.i15());
@@ -241,14 +246,14 @@ inline std::uint64_t records(im::RecordSet s) {
         opt(c, x.b0()); opt(c, x.b1()); opt(c, x.b2()); opt(c, x.b3()); opt(c, x.b4()); opt(c, x.b5()); opt(c, x.b6()); opt(c, x.b7());
         str(c, x.s0()); str(c, x.s1()); str(c, x.s2()); str(c, x.s3());
     }
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t series(im::Series s) {
     Checksum c;
     auto samples = s.samples();
-    if (!samples) { c.absent(); return c.h; }
-    c.u(samples.size());
+    if (!samples) { c.absent(); return c.value(); }
+    c.n(samples.size());
     for (im::Sample x : samples) {
         c.i(x.timestamp());
         c.d(x.value());
@@ -256,7 +261,7 @@ inline std::uint64_t series(im::Series s) {
         c.f(x.quality());
         str(c, x.note());
     }
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t lookup(im::Lookup x) {
@@ -266,7 +271,7 @@ inline std::uint64_t lookup(im::Lookup x) {
     else {
         auto keys = items.keys();
         auto values = items.values();
-        c.u(keys.size());
+        c.n(keys.size());
         for (std::uint32_t i = 0; i < keys.size(); ++i) {
             str(c, keys[i]);
             c.i(values[i].count());
@@ -278,20 +283,20 @@ inline std::uint64_t lookup(im::Lookup x) {
     else {
         auto keys = prices.keys();
         auto values = prices.values();
-        c.u(keys.size());
+        c.n(keys.size());
         for (std::uint32_t i = 0; i < keys.size(); ++i) {
             c.i(keys[i]);
             c.d(values[i]);
         }
     }
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t fixed_series(im::FixedSeries s) {
     Checksum c;
     auto samples = s.samples();
-    if (!samples) { c.absent(); return c.h; }
-    c.u(samples.size());
+    if (!samples) { c.absent(); return c.value(); }
+    c.n(samples.size());
     for (im::FixedSample x : samples) {
         c.i(x.timestamp());
         c.d(x.value());
@@ -299,7 +304,7 @@ inline std::uint64_t fixed_series(im::FixedSeries s) {
         c.f(x.quality());
         str(c, x.note());
     }
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t scene(im::Scene s) {
@@ -307,7 +312,7 @@ inline std::uint64_t scene(im::Scene s) {
     auto nodes = s.nodes();
     if (!nodes) c.absent();
     else {
-        c.u(nodes.size());
+        c.n(nodes.size());
         for (im::Node n : nodes) {
             c.i(n.id());
             str(c, n.name());
@@ -320,21 +325,21 @@ inline std::uint64_t scene(im::Scene s) {
             auto ch = n.children();
             if (!ch) c.absent();
             else {
-                c.u(ch.size());
+                c.n(ch.size());
                 for (std::int32_t x : ch) c.i(x);
             }
         }
     }
     str(c, s.name());
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t canada(im::FeatureCollection x) {
     Checksum c;
     str(c, x.type());
     auto features = x.features();
-    if (!features) { c.absent(); return c.h; }
-    c.u(features.size());
+    if (!features) { c.absent(); return c.value(); }
+    c.n(features.size());
     for (im::Feature f : features) {
         str(c, f.type());
         auto props = f.properties();
@@ -342,7 +347,7 @@ inline std::uint64_t canada(im::FeatureCollection x) {
         else {
             auto keys = props.keys();
             auto values = props.values();
-            c.u(keys.size());
+            c.n(keys.size());
             for (std::uint32_t i = 0; i < keys.size(); ++i) {
                 str(c, keys[i]);
                 str(c, values[i]);
@@ -353,17 +358,17 @@ inline std::uint64_t canada(im::FeatureCollection x) {
         str(c, g.type());
         auto rings = g.coordinates();
         if (!rings) { c.absent(); continue; }
-        c.u(rings.size());
+        c.n(rings.size());
         for (tessera::Vector<im::Point> ring : rings) {
             if (!ring) { c.absent(); continue; }
-            c.u(ring.size());
+            c.n(ring.size());
             for (const im::Point& p : ring) {
                 c.d(p.x);
                 c.d(p.y);
             }
         }
     }
-    return c.h;
+    return c.value();
 }
 
 }  // namespace tessera_read
@@ -389,7 +394,7 @@ BENCH_HELPER void ref_or_zero(Checksum& c, const fbm::ObjectRef* r) {
 
 BENCH_HELPER void refs(Checksum& c, const flatbuffers::Vector<const fbm::ObjectRef*>* v) {
     if (!v) { c.absent(); return; }
-    c.u(v->size());
+    c.n(v->size());
     for (const fbm::ObjectRef* r : *v) ref(c, *r);
 }
 
@@ -475,21 +480,21 @@ inline void component(Checksum& c, fbm::Component type, const void* p) {
 inline std::uint64_t prefab(const fbm::Prefab* p) {
     Checksum c;
     auto objects = p->objects();
-    if (!objects) { c.absent(); return c.h; }
-    c.u(objects->size());
+    if (!objects) { c.absent(); return c.value(); }
+    c.n(objects->size());
     for (const fbm::PrefabObject* o : *objects) {
         str(c, o->name());
         auto types = o->components_type();
         auto comps = o->components();
         if (!comps) c.absent();
         else {
-            c.u(comps->size());
+            c.n(comps->size());
             for (flatbuffers::uoffset_t i = 0; i < comps->size(); ++i) component(c, types->Get(i), comps->Get(i));
         }
         auto children = o->children();
         if (!children) c.absent();
         else {
-            c.u(children->size());
+            c.n(children->size());
             for (std::int32_t ch : *children) c.i(ch);
         }
         v4(c, o->rotation());
@@ -502,7 +507,7 @@ inline std::uint64_t prefab(const fbm::Prefab* p) {
         c.i(o->id());
         c.b(o->active());
     }
-    return c.h;
+    return c.value();
 }
 
 inline void weapon(Checksum& c, const fbm::Weapon* w) {
@@ -513,8 +518,8 @@ inline void weapon(Checksum& c, const fbm::Weapon* w) {
 inline std::uint64_t world(const fbm::World* w) {
     Checksum c;
     auto monsters = w->monsters();
-    if (!monsters) { c.absent(); return c.h; }
-    c.u(monsters->size());
+    if (!monsters) { c.absent(); return c.value(); }
+    c.n(monsters->size());
     for (const fbm::Monster* m : *monsters) {
         str(c, m->name());
         c.i(m->hp());
@@ -526,13 +531,13 @@ inline std::uint64_t world(const fbm::World* w) {
         auto inv = m->inventory();
         if (!inv) c.absent();
         else {
-            c.u(inv->size());
+            c.n(inv->size());
             for (std::uint8_t x : *inv) c.u(x);
         }
         auto weapons = m->weapons();
         if (!weapons) c.absent();
         else {
-            c.u(weapons->size());
+            c.n(weapons->size());
             for (const fbm::Weapon* x : *weapons) weapon(c, x);
         }
         if (auto e = m->equipped()) weapon(c, e);
@@ -540,12 +545,12 @@ inline std::uint64_t world(const fbm::World* w) {
         auto path = m->path();
         if (!path) c.absent();
         else {
-            c.u(path->size());
+            c.n(path->size());
             for (const fbm::Vec3* v : *path) v3(c, v);
         }
         c.b(m->friendly());
     }
-    return c.h;
+    return c.value();
 }
 
 template <class T> BENCH_HELPER void opt(Checksum& c, flatbuffers::Optional<T> v) {
@@ -559,8 +564,8 @@ template <class T> BENCH_HELPER void opt(Checksum& c, flatbuffers::Optional<T> v
 inline std::uint64_t records(const fbm::RecordSet* s) {
     Checksum c;
     auto records = s->records();
-    if (!records) { c.absent(); return c.h; }
-    c.u(records->size());
+    if (!records) { c.absent(); return c.value(); }
+    c.n(records->size());
     for (const fbm::Record* x : *records) {
         opt(c, x->i0()); opt(c, x->i1()); opt(c, x->i2()); opt(c, x->i3()); opt(c, x->i4()); opt(c, x->i5()); opt(c, x->i6()); opt(c, x->i7());
         opt(c, x->i8()); opt(c, x->i9()); opt(c, x->i10()); opt(c, x->i11()); opt(c, x->i12()); opt(c, x->i13()); opt(c, x->i14()); opt(c, x->i15());
@@ -569,14 +574,14 @@ inline std::uint64_t records(const fbm::RecordSet* s) {
         opt(c, x->b0()); opt(c, x->b1()); opt(c, x->b2()); opt(c, x->b3()); opt(c, x->b4()); opt(c, x->b5()); opt(c, x->b6()); opt(c, x->b7());
         str(c, x->s0()); str(c, x->s1()); str(c, x->s2()); str(c, x->s3());
     }
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t lookup(const fbm::Lookup* x) {
     Checksum c;
     if (!x->items()) c.absent();
     else {
-        c.u(x->items()->size());
+        c.n(x->items()->size());
         for (const fbm::LookupItem* e : *x->items()) {
             str(c, e->name());
             c.i(e->count());
@@ -585,20 +590,20 @@ inline std::uint64_t lookup(const fbm::Lookup* x) {
     }
     if (!x->prices()) c.absent();
     else {
-        c.u(x->prices()->size());
+        c.n(x->prices()->size());
         for (const fbm::LookupPrice* e : *x->prices()) {
             c.i(e->id());
             c.d(e->price());
         }
     }
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t series(const fbm::Series* s) {
     Checksum c;
     auto samples = s->samples();
-    if (!samples) { c.absent(); return c.h; }
-    c.u(samples->size());
+    if (!samples) { c.absent(); return c.value(); }
+    c.n(samples->size());
     for (const fbm::Sample* x : *samples) {
         c.i(x->timestamp());
         c.d(x->value());
@@ -606,7 +611,7 @@ inline std::uint64_t series(const fbm::Series* s) {
         c.f(x->quality());
         str(c, x->note());
     }
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t scene(const fbm::Scene* s) {
@@ -614,7 +619,7 @@ inline std::uint64_t scene(const fbm::Scene* s) {
     auto nodes = s->nodes();
     if (!nodes) c.absent();
     else {
-        c.u(nodes->size());
+        c.n(nodes->size());
         for (const fbm::Node* n : *nodes) {
             c.i(n->id());
             str(c, n->name());
@@ -627,27 +632,27 @@ inline std::uint64_t scene(const fbm::Scene* s) {
             auto ch = n->children();
             if (!ch) c.absent();
             else {
-                c.u(ch->size());
+                c.n(ch->size());
                 for (std::int32_t x : *ch) c.i(x);
             }
         }
     }
     str(c, s->name());
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t canada(const fbm::FeatureCollection* x) {
     Checksum c;
     str(c, x->type());
     auto features = x->features();
-    if (!features) { c.absent(); return c.h; }
-    c.u(features->size());
+    if (!features) { c.absent(); return c.value(); }
+    c.n(features->size());
     for (const fbm::Feature* f : *features) {
         str(c, f->type());
         auto props = f->properties();
         if (!props) c.absent();
         else {
-            c.u(props->size());
+            c.n(props->size());
             for (const fbm::Property* p : *props) {
                 str(c, p->key());
                 str(c, p->value());
@@ -658,18 +663,18 @@ inline std::uint64_t canada(const fbm::FeatureCollection* x) {
         str(c, g->type());
         auto rings = g->coordinates();
         if (!rings) { c.absent(); continue; }
-        c.u(rings->size());
+        c.n(rings->size());
         for (const fbm::Ring* ring : *rings) {
             auto points = ring->points();
             if (!points) { c.absent(); continue; }
-            c.u(points->size());
+            c.n(points->size());
             for (const fbm::Point* p : *points) {
                 c.d(p->x());
                 c.d(p->y());
             }
         }
     }
-    return c.h;
+    return c.value();
 }
 
 }  // namespace fb_read
@@ -697,7 +702,7 @@ BENCH_HELPER void ref(Checksum& c, const obj& r) { c.u(integer(at(r, 0))); c.i(s
 
 BENCH_HELPER void refs(Checksum& c, const obj& v) {
     if (nil(v)) { c.absent(); return; }
-    c.u(v.via.array.size);
+    c.n(v.via.array.size);
     for (std::uint32_t i = 0; i < v.via.array.size; ++i) ref(c, at(v, i));
 }
 
@@ -746,28 +751,28 @@ inline void component(Checksum& c, const obj& u) {
 inline std::uint64_t prefab(const obj& p) {
     Checksum c;
     const obj& objects = at(p, 0);
-    if (nil(objects)) { c.absent(); return c.h; }
-    c.u(objects.via.array.size);
+    if (nil(objects)) { c.absent(); return c.value(); }
+    c.n(objects.via.array.size);
     for (std::uint32_t k = 0; k < objects.via.array.size; ++k) {
         const obj& o = at(objects, k);
         str(c, at(o, 0));
         const obj& comps = at(o, 1);
         if (nil(comps)) c.absent();
         else {
-            c.u(comps.via.array.size);
+            c.n(comps.via.array.size);
             for (std::uint32_t j = 0; j < comps.via.array.size; ++j) component(c, at(comps, j));
         }
         const obj& children = at(o, 2);
         if (nil(children)) c.absent();
         else {
-            c.u(children.via.array.size);
+            c.n(children.via.array.size);
             for (std::uint32_t j = 0; j < children.via.array.size; ++j) i(c, at(children, j));
         }
         v4(c, at(o, 3)); v3(c, at(o, 4)); v3(c, at(o, 5)); v2(c, at(o, 6)); v2(c, at(o, 7)); v2(c, at(o, 8)); v2(c, at(o, 9));
         i(c, at(o, 10));
         c.b(at(o, 11).via.boolean);
     }
-    return c.h;
+    return c.value();
 }
 
 inline void weapon(Checksum& c, const obj& w) {
@@ -778,8 +783,8 @@ inline void weapon(Checksum& c, const obj& w) {
 inline std::uint64_t world(const obj& w) {
     Checksum c;
     const obj& monsters = at(w, 0);
-    if (nil(monsters)) { c.absent(); return c.h; }
-    c.u(monsters.via.array.size);
+    if (nil(monsters)) { c.absent(); return c.value(); }
+    c.n(monsters.via.array.size);
     for (std::uint32_t k = 0; k < monsters.via.array.size; ++k) {
         const obj& m = at(monsters, k);
         str(c, at(m, 0));
@@ -791,13 +796,13 @@ inline std::uint64_t world(const obj& w) {
         const obj& inv = at(m, 5);
         if (nil(inv)) c.absent();
         else {
-            c.u(inv.via.bin.size);
+            c.n(inv.via.bin.size);
             for (std::uint32_t j = 0; j < inv.via.bin.size; ++j) c.u(static_cast<std::uint8_t>(inv.via.bin.ptr[j]));
         }
         const obj& weapons = at(m, 6);
         if (nil(weapons)) c.absent();
         else {
-            c.u(weapons.via.array.size);
+            c.n(weapons.via.array.size);
             for (std::uint32_t j = 0; j < weapons.via.array.size; ++j) weapon(c, at(weapons, j));
         }
         if (nil(at(m, 7))) c.absent();
@@ -805,19 +810,19 @@ inline std::uint64_t world(const obj& w) {
         const obj& path = at(m, 8);
         if (nil(path)) c.absent();
         else {
-            c.u(path.via.array.size);
+            c.n(path.via.array.size);
             for (std::uint32_t j = 0; j < path.via.array.size; ++j) v3(c, at(path, j));
         }
         c.b(at(m, 9).via.boolean);
     }
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t records(const obj& s) {
     Checksum c;
     const obj& records = at(s, 0);
-    if (nil(records)) { c.absent(); return c.h; }
-    c.u(records.via.array.size);
+    if (nil(records)) { c.absent(); return c.value(); }
+    c.n(records.via.array.size);
     for (std::uint32_t k = 0; k < records.via.array.size; ++k) {
         const obj& x = at(records, k);
         for (std::uint32_t j = 0; j < 16; ++j) { const obj& v = at(x, j); if (nil(v)) c.absent(); else i(c, v); }
@@ -826,7 +831,7 @@ inline std::uint64_t records(const obj& s) {
         for (std::uint32_t j = 28; j < 36; ++j) { const obj& v = at(x, j); if (nil(v)) c.absent(); else c.b(v.via.boolean); }
         for (std::uint32_t j = 36; j < 40; ++j) str(c, at(x, j));
     }
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t lookup(const obj& x) {
@@ -834,7 +839,7 @@ inline std::uint64_t lookup(const obj& x) {
     const obj& items = at(x, 0);
     if (nil(items)) c.absent();
     else {
-        c.u(items.via.map.size);
+        c.n(items.via.map.size);
         for (std::uint32_t k = 0; k < items.via.map.size; ++k) {
             const auto& kv = items.via.map.ptr[k];
             str(c, kv.key);
@@ -845,21 +850,21 @@ inline std::uint64_t lookup(const obj& x) {
     const obj& prices = at(x, 1);
     if (nil(prices)) c.absent();
     else {
-        c.u(prices.via.map.size);
+        c.n(prices.via.map.size);
         for (std::uint32_t k = 0; k < prices.via.map.size; ++k) {
             const auto& kv = prices.via.map.ptr[k];
             i(c, kv.key);
             c.d(kv.val.via.f64);
         }
     }
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t series(const obj& s) {
     Checksum c;
     const obj& samples = at(s, 0);
-    if (nil(samples)) { c.absent(); return c.h; }
-    c.u(samples.via.array.size);
+    if (nil(samples)) { c.absent(); return c.value(); }
+    c.n(samples.via.array.size);
     for (std::uint32_t k = 0; k < samples.via.array.size; ++k) {
         const obj& x = at(samples, k);
         i(c, at(x, 0));
@@ -868,7 +873,7 @@ inline std::uint64_t series(const obj& s) {
         c.f(f32(at(x, 3)));
         str(c, at(x, 4));
     }
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t scene(const obj& s) {
@@ -876,7 +881,7 @@ inline std::uint64_t scene(const obj& s) {
     const obj& nodes = at(s, 0);
     if (nil(nodes)) c.absent();
     else {
-        c.u(nodes.via.array.size);
+        c.n(nodes.via.array.size);
         for (std::uint32_t k = 0; k < nodes.via.array.size; ++k) {
             const obj& n = at(nodes, k);
             i(c, at(n, 0));
@@ -890,28 +895,28 @@ inline std::uint64_t scene(const obj& s) {
             const obj& ch = at(n, 7);
             if (nil(ch)) c.absent();
             else {
-                c.u(ch.via.array.size);
+                c.n(ch.via.array.size);
                 for (std::uint32_t j = 0; j < ch.via.array.size; ++j) i(c, at(ch, j));
             }
         }
     }
     str(c, at(s, 1));
-    return c.h;
+    return c.value();
 }
 
 inline std::uint64_t canada(const obj& x) {
     Checksum c;
     str(c, at(x, 0));
     const obj& features = at(x, 1);
-    if (nil(features)) { c.absent(); return c.h; }
-    c.u(features.via.array.size);
+    if (nil(features)) { c.absent(); return c.value(); }
+    c.n(features.via.array.size);
     for (std::uint32_t k = 0; k < features.via.array.size; ++k) {
         const obj& f = at(features, k);
         str(c, at(f, 0));
         const obj& props = at(f, 1);
         if (nil(props)) c.absent();
         else {
-            c.u(props.via.map.size);
+            c.n(props.via.map.size);
             for (std::uint32_t j = 0; j < props.via.map.size; ++j) {
                 str(c, props.via.map.ptr[j].key);
                 str(c, props.via.map.ptr[j].val);
@@ -922,11 +927,11 @@ inline std::uint64_t canada(const obj& x) {
         str(c, at(g, 0));
         const obj& rings = at(g, 1);
         if (nil(rings)) { c.absent(); continue; }
-        c.u(rings.via.array.size);
+        c.n(rings.via.array.size);
         for (std::uint32_t r = 0; r < rings.via.array.size; ++r) {
             const obj& ring = at(rings, r);
             if (nil(ring)) { c.absent(); continue; }
-            c.u(ring.via.array.size);
+            c.n(ring.via.array.size);
             for (std::uint32_t j = 0; j < ring.via.array.size; ++j) {
                 const obj& p = at(ring, j);
                 c.d(at(p, 0).via.f64);
@@ -934,7 +939,7 @@ inline std::uint64_t canada(const obj& x) {
             }
         }
     }
-    return c.h;
+    return c.value();
 }
 
 }  // namespace mp_read

@@ -8,16 +8,21 @@ namespace Bench;
 /// <summary>
 /// Reference checksum over every field, computed from the C# objects. The C++ readers (benchmarks/native) compute the
 /// same value from each library's buffer; a mismatch fails the benchmark. Absent nullable values mix a marker, strings
-/// mix their UTF-8 length and first byte, vectors their count and every element, unions their type index.
+/// mix their UTF-8 length and first byte, vectors every element, unions their type index. The lengths of vectors and
+/// dictionaries are summed apart from the chain, so their order does not matter: a JSON reader learns a length only
+/// after the elements, while the binary formats store it in front.
 /// </summary>
 public sealed class Checksum
 {
     private const ulong Absent = 0x9E3779B97F4A7C15UL;
     private ulong _h = 0xCBF29CE484222325UL;
+    private ulong _counts;
 
-    public ulong Value => _h;
+    public ulong Value => _h ^ unchecked(_counts * 0x9E3779B97F4A7C15UL);
 
     private void Mix(ulong v) => _h = unchecked((_h ^ v) * 0x100000001B3UL);
+
+    private void Count(int n) => _counts += (ulong)n;
 
     private void I(long v) => Mix(unchecked((ulong)v));
 
@@ -56,7 +61,7 @@ public sealed class Checksum
             return;
         }
 
-        Mix((ulong)list.Count);
+        Count(list.Count);
         foreach (var x in list) f(x);
     }
 
@@ -222,7 +227,7 @@ public sealed class Checksum
         if (x.Items == null) c.Mix(Absent);
         else
         {
-            c.Mix((ulong)x.Items.Count);
+            c.Count(x.Items.Count);
             foreach (var kv in x.Items)
             {
                 c.S(kv.Key);
@@ -234,7 +239,7 @@ public sealed class Checksum
         if (x.Prices == null) c.Mix(Absent);
         else
         {
-            c.Mix((ulong)x.Prices.Count);
+            c.Count(x.Prices.Count);
             foreach (var kv in x.Prices)
             {
                 c.I(kv.Key);
@@ -295,7 +300,7 @@ public sealed class Checksum
         if (f.Properties == null) Mix(Absent);
         else
         {
-            Mix((ulong)f.Properties.Count);
+            Count(f.Properties.Count);
             foreach (var kv in f.Properties)
             {
                 S(kv.Key);
