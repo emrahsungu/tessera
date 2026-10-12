@@ -1,4 +1,4 @@
-# Fetches the pinned third-party code and data used only by the benchmarks and interop tests.
+# Fetches the pinned third-party code and data used only by the benchmarks.
 # The Tessera library itself has no dependencies. Everything lands in the git-ignored .deps folder.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -23,7 +23,26 @@ $pins = @(
     # The canada workload's data: the contour of Canada as GeoJSON, a common JSON benchmark (nativejson-benchmark, MIT).
     @{ Name = 'canada.json'
        Url = 'https://raw.githubusercontent.com/miloyip/nativejson-benchmark/478d5727c2a4048e835a29c65adecc7d795360d5/data/canada.json'
-       Sha256 = 'F83B3B354030D5DD58740C68AC4FECEF64CB730A0D12A90362A7F23077F50D78' }
+       Sha256 = 'F83B3B354030D5DD58740C68AC4FECEF64CB730A0D12A90362A7F23077F50D78' },
+    # The C++ JSON reader: simdjson's single-header release (Apache-2.0 or MIT).
+    @{ Name = 'simdjson-5.0.3.h'
+       Url = 'https://raw.githubusercontent.com/simdjson/simdjson/bf89ddd00ef5fcb6a7f20611ea8853d258b67249/singleheader/simdjson.h'
+       Sha256 = 'C23412D6A5AEDB3215CA6617DB882EEE47642318C330173C319A8FCA454B9F3D' },
+    @{ Name = 'simdjson-5.0.3.cpp'
+       Url = 'https://raw.githubusercontent.com/simdjson/simdjson/bf89ddd00ef5fcb6a7f20611ea8853d258b67249/singleheader/simdjson.cpp'
+       Sha256 = 'F44B2798458DD6473AFCD3C564A3433C657E38493A10BD50812589A20E2EC00D' },
+    # Protocol Buffers: protoc for the generated code, and the C++ runtime (libprotobuf, with the Abseil version it
+    # pins), built from source for each compiler by scripts/protobuf.ps1 and scripts/protobuf-linux.sh (BSD-3-Clause,
+    # Apache-2.0).
+    @{ Name = 'protoc-36.2-win64.zip'
+       Url = 'https://github.com/protocolbuffers/protobuf/releases/download/v36.2/protoc-36.2-win64.zip'
+       Sha256 = 'F0C128DC0D8492ECEECE83BB459A4C0E316764B929FFBF1AA416357FD644EDD3' },
+    @{ Name = 'protobuf-36.2.zip'
+       Url = 'https://github.com/protocolbuffers/protobuf/releases/download/v36.2/protobuf-36.2.zip'
+       Sha256 = 'EC61440905B46D42DC58CE7B490F0469263A21F93407F741C97E9B6B09533EB6' },
+    @{ Name = 'abseil-cpp-20250512.1.tar.gz'
+       Url = 'https://github.com/abseil/abseil-cpp/releases/download/20250512.1/abseil-cpp-20250512.1.tar.gz'
+       Sha256 = '9B7A064305E9FD94D124FFA6CC358592EB42B5DA588FB4E07D09254AA40086DB' }
 )
 
 foreach ($pin in $pins) {
@@ -68,4 +87,24 @@ if (-not (Test-Path (Join-Path $mp 'include/msgpack.hpp'))) {
     Remove-Item -Recurse -Force $tmp
 }
 
-Write-Host "Dependencies ready in $deps (FlatBuffers $flatbuffersTag, msgpack-cxx 9.0.0, canada.json)."
+$simdjson = Join-Path $deps 'simdjson'
+if (-not (Test-Path (Join-Path $simdjson 'simdjson.cpp'))) {
+    New-Item -ItemType Directory -Force $simdjson | Out-Null
+    Copy-Item (Join-Path $downloads 'simdjson-5.0.3.h') (Join-Path $simdjson 'simdjson.h')
+    Copy-Item (Join-Path $downloads 'simdjson-5.0.3.cpp') (Join-Path $simdjson 'simdjson.cpp')
+}
+
+$protoc = Join-Path $deps 'protoc'
+if (-not (Test-Path (Join-Path $protoc 'bin/protoc.exe'))) {
+    Expand-Archive (Join-Path $downloads 'protoc-36.2-win64.zip') $protoc -Force
+}
+
+# libprotobuf for each Windows compiler; it takes a few minutes the first time.
+foreach ($toolchain in 'msvc', 'clangcl') {
+    if (-not (Test-Path (Join-Path $deps "protobuf/$toolchain/lib/cmake/protobuf"))) {
+        & (Join-Path $PSScriptRoot 'protobuf.ps1') -Toolchain $toolchain
+        if ($LASTEXITCODE -ne 0) { throw "building libprotobuf ($toolchain) failed" }
+    }
+}
+
+Write-Host "Dependencies ready in $deps (FlatBuffers $flatbuffersTag, msgpack-cxx 9.0.0, simdjson 5.0.3, protobuf 36.2, canada.json)."

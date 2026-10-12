@@ -11,6 +11,26 @@ namespace Bench;
 /// <summary>Builds docs/BENCHMARKS.md-style tables from benchmarks/results/*.json.</summary>
 public static class Report
 {
+    /// <summary>A library Tessera is compared with, under the names the results give it per measurement (null: not measured).</summary>
+    internal sealed record Rival(string Name, string? Size, string? Write, string? Read);
+
+    /// <summary>JSON is written by System.Text.Json and read by simdjson; MemoryPack has no C++ reader.</summary>
+    internal static readonly Rival[] Rivals =
+    {
+        new("FlatBuffers", "FlatBuffers", "FlatBuffers", "FlatBuffers"),
+        new("MessagePack", "MessagePack", "MessagePack", "MessagePack"),
+        new("Protobuf", "Protobuf", "Protobuf", "Protobuf"),
+        new("JSON", "JSON", "System.Text.Json", "JSON"),
+        new("MemoryPack", "MemoryPack", "MemoryPack", null),
+    };
+
+    /// <summary>The C++ readers that parse a buffer before reading it: their traversal and random access read a tree parsed beforehand.</summary>
+    internal static readonly string[] Parsers = { "MessagePack", "Protobuf", "JSON" };
+
+    private sealed record Size(string Workload, string Library, int Bytes, int Gzip);
+
+    private sealed record Write(string Workload, string Library, string Variant, double Us, double Alloc);
+
     public static string Build(string resultsDir)
     {
         var sb = new StringBuilder();
@@ -18,38 +38,43 @@ public static class Report
         var env = dotnet.RootElement.GetProperty("environment");
         var natives = Directory.GetFiles(resultsDir, "native-*.json").OrderBy(f => f, StringComparer.Ordinal)
             .Select(f => JsonDocument.Parse(File.ReadAllText(f))).ToList();
+        string Env(string name) => env.TryGetProperty(name, out var v) ? v.GetString() ?? "" : "";
 
         sb.AppendLine("# Benchmark results");
         sb.AppendLine();
-        sb.AppendLine($"- CPU: {env.GetProperty("cpu").GetString()}");
-        sb.AppendLine($"- OS: {env.GetProperty("os").GetString()}; .NET: {env.GetProperty("dotnet").GetString()}");
+        sb.AppendLine($"- CPU: {Env("cpu")}");
+        sb.AppendLine($"- OS: {Env("os")}; .NET: {Env("dotnet")}");
         sb.AppendLine($"- C++ compilers: {string.Join(", ", natives.Select(n => n.RootElement.GetProperty("compiler").GetString()))}");
-        sb.AppendLine($"- Libraries: Tessera {env.GetProperty("tessera").GetString()}, FlatBuffers {env.GetProperty("flatbuffers").GetString()}, MessagePack-CSharp {env.GetProperty("messagepack").GetString()}, msgpack-cxx 9.0.0");
-        sb.AppendLine($"- Recorded {env.GetProperty("timestamp_utc").GetString()}. Medians of interleaved rounds; ±MAD in the raw JSON.");
+        sb.AppendLine($"- .NET libraries: Tessera {Env("tessera")}, FlatBuffers {Env("flatbuffers")}, MessagePack-CSharp {Env("messagepack")}, MemoryPack {Env("memorypack")}, Google.Protobuf {Env("protobuf")}, System.Text.Json {Env("system_text_json")}, Newtonsoft.Json {Env("newtonsoft_json")}; measured with {Env("benchmark_tool")}");
+        sb.AppendLine("- C++ libraries: FlatBuffers 25.12.19, msgpack-cxx 9.0.0, libprotobuf 36.2 (with Abseil 20250512.1), simdjson 5.0.3, each compiled from source with the benchmark's flags");
+        sb.AppendLine($"- Recorded {Env("timestamp_utc")}. Medians of interleaved rounds; ±MAD in the raw JSON.");
         sb.AppendLine();
-        sb.AppendLine("Every reader computes a checksum over every field (presence included) and must match the value computed from the C# objects before anything is timed. The C++ readers' small helper functions are force-inlined with MSVC, for all three libraries: MSVC stopped inlining them into one large function when it read Tessera (`benchmarks/native/readers.hpp` explains).");
+        sb.AppendLine("Every library writes the same C# objects. Every C++ reader computes a checksum over every field (presence included), which must match the value computed from the C# objects before anything is timed. The C++ readers' small helper functions are force-inlined with MSVC, for every library: MSVC stopped inlining them into one large function when it read Tessera (`benchmarks/native/readers.hpp` explains).");
         sb.AppendLine();
 
         var sizes = dotnet.RootElement.GetProperty("sizes").EnumerateArray()
-            .Select(s => (Workload: s.GetProperty("workload").GetString()!, Library: s.GetProperty("library").GetString()!, Bytes: s.GetProperty("bytes").GetInt32(), Gzip: s.GetProperty("gzip").GetInt32()))
+            .Select(s => new Size(s.GetProperty("workload").GetString()!, s.GetProperty("library").GetString()!, s.GetProperty("bytes").GetInt32(), s.GetProperty("gzip").GetInt32()))
             .ToList();
         string[] workloads = sizes.Select(s => s.Workload).Distinct().ToArray();
         var write = dotnet.RootElement.GetProperty("write").EnumerateArray()
-            .Select(w => (Workload: w.GetProperty("workload").GetString()!, Library: w.GetProperty("library").GetString()!, Variant: w.GetProperty("variant").GetString()!,
-                Us: w.GetProperty("median_us").GetDouble(), Alloc: w.GetProperty("alloc_bytes").GetDouble()))
+            .Select(w => new Write(w.GetProperty("workload").GetString()!, w.GetProperty("library").GetString()!, w.GetProperty("variant").GetString()!,
+                w.GetProperty("median_us").GetDouble(), w.GetProperty("alloc_bytes").GetDouble()))
             .ToList();
+        double Bytes(string w, string lib) => sizes.FirstOrDefault(s => s.Workload == w && s.Library == lib)?.Bytes ?? 0;
+        double WriteUs(string w, string lib, string variant = "to byte[]") => write.FirstOrDefault(x => x.Workload == w && x.Library == lib && x.Variant == variant)?.Us ?? 0;
 
         // ------------------------------------------------------------------ summary
         sb.AppendLine("## Summary");
         sb.AppendLine();
         sb.AppendLine($"How many times faster (or smaller) Tessera is: the other library's time or size divided by Tessera's, as the geometric mean over the {workloads.Length} workloads, with the per-workload range in parentheses. Above 1 means Tessera wins.");
         sb.AppendLine();
-        sb.AppendLine("| | vs FlatBuffers | vs MessagePack |");
-        sb.AppendLine("|---|---:|---:|");
-        void Summary(string label, Func<string, string, double> metric, bool messagePack = true)
+        sb.AppendLine($"| | {string.Join(" | ", Rivals.Select(r => "vs " + r.Name))} |");
+        sb.AppendLine($"|---|{string.Join("|", Rivals.Select(_ => "---:"))}|");
+        void Summary(string label, Func<string, string, double> metric, Func<Rival, string?> nameOf)
         {
-            string Ratio(string other)
+            string Ratio(string? other)
             {
+                if (other == null) return "";
                 var r = workloads.Select(w => (Other: metric(w, other), Tessera: metric(w, "Tessera"))).Where(x => x.Other > 0 && x.Tessera > 0).Select(x => x.Other / x.Tessera).ToList();
                 if (r.Count == 0) return "";
                 double geo = Math.Exp(r.Average(Math.Log));
@@ -57,95 +82,120 @@ public static class Report
                 return $"{g} ({r.Min():0.00}–{r.Max():0.00})";
             }
 
-            sb.AppendLine($"| {label} | {Ratio("FlatBuffers")} | {(messagePack ? Ratio("MessagePack") : "")} |");
+            sb.AppendLine($"| {label} | {string.Join(" | ", Rivals.Select(r => Ratio(nameOf(r))))} |");
         }
 
-        Summary("Size", (w, lib) => sizes.FirstOrDefault(s => s.Workload == w && s.Library == lib).Bytes);
-        Summary(".NET write", (w, lib) => write.FirstOrDefault(x => x.Workload == w && x.Library == lib && x.Variant == "to byte[]").Us);
+        Summary("Size", Bytes, r => r.Size);
+        Summary(".NET write", (w, lib) => WriteUs(w, lib), r => r.Write);
         foreach (var native in natives)
         {
             var root = native.RootElement;
             string compiler = root.GetProperty("compiler").GetString()!;
             var rows = ReadRows(root);
-            foreach (var (label, prefix, mp) in new[] { ("verify", "verify", true), ("full traversal", "full traversal", false), ("verify + traversal", "verify + traversal", true), ("random access", "random access x1000", false) })
+            foreach (var (label, prefix, parsersToo) in SummaryReads)
             {
-                Summary($"C++ {label} ({compiler})", (w, lib) => Op(rows, w, lib, prefix), mp);
+                Summary($"C++ {label} ({compiler})", (w, lib) => Op(rows, w, lib, prefix), r => r.Read is { } name && (parsersToo || !Parsers.Contains(name)) ? name : null);
             }
         }
 
         sb.AppendLine();
-        sb.AppendLine("MessagePack has no separate verify step: its \"verify\" is a full parse into a tree, which its traversal and random access then use (those two are left out of the MessagePack column because they exclude the parse). msgpack-cxx parses into a reused zone, with strings and binary data referenced in the buffer rather than copied (its zero-copy option): its fastest way, measured. Its tree for the traversal, random access and lookups is parsed once with the strings copied: that reads as fast and scans keys twice as fast.");
+        sb.AppendLine("MessagePack, Protobuf and JSON are parsed before they are read: their \"verify\" is the parse (into a tree for MessagePack and Protobuf, into simdjson's DOM for JSON), and their traversal and random access read a tree parsed beforehand, so those two are left out of their columns. JSON is written by System.Text.Json and read by simdjson. MemoryPack has no C++ reader. How each parser is set up is in the C++ section below.");
         sb.AppendLine();
-        sb.AppendLine($"Where Tessera is slower in these results (by more than {(SlowerMargin - 1) * 100:0}% for the C++ reads), and why:");
+        sb.AppendLine($"Where Tessera is slower or larger in these results (by more than {(SlowerMargin - 1) * 100:0}% for the C++ reads), and why:");
         sb.AppendLine();
-        foreach (string line in Slower(natives, workloads, write, sizes)) sb.AppendLine("- " + line);
+        var slower = Slower(natives, workloads, write, sizes);
+        if (slower.Count == 0) sb.AppendLine("- Nowhere.");
+        foreach (string line in slower) sb.AppendLine("- " + line);
         sb.AppendLine();
 
         // ------------------------------------------------------------------ sizes
-        string[] sizeColumns = { "Tessera", "Tessera (full sharing)", "Tessera (no schema)", "FlatBuffers", "FlatBuffers (shared strings)", "MessagePack" };
+        string[] sizeColumns = { "Tessera", "Tessera (full sharing)", "Tessera (no schema)", "FlatBuffers", "FlatBuffers (shared strings)", "MessagePack", "Protobuf", "MemoryPack", "JSON" };
+        string[] sizeBest = { "Tessera", "FlatBuffers", "MessagePack", "Protobuf", "MemoryPack", "JSON" };
         sb.AppendLine("## Size (bytes, smaller is better)");
         sb.AppendLine();
-        Table(sb, "Workload", sizeColumns, workloads, (w, c) =>
-        {
-            var row = sizes.FirstOrDefault(s => s.Workload == w && s.Library == c);
-            return row.Library == null ? "" : row.Bytes.ToString("N0", CultureInfo.InvariantCulture);
-        }, (w, c) => sizes.Where(s => s.Workload == w && (s.Library == "Tessera" || s.Library == "FlatBuffers" || s.Library == "MessagePack")).Min(s => s.Bytes) == sizes.FirstOrDefault(s => s.Workload == w && s.Library == c).Bytes);
+        sb.AppendLine("JSON is System.Text.Json's; Newtonsoft.Json writes the same JSON, apart from how it formats some numbers. The smallest of the libraries' default outputs is in bold.");
+        sb.AppendLine();
+        Table(sb, "Workload", sizeColumns, workloads, (w, c) => Bytes(w, c) > 0 ? Bytes(w, c).ToString("N0", CultureInfo.InvariantCulture) : "",
+            (w, c) => Best(sizeBest.Select(l => (l, Bytes(w, l))), c));
         sb.AppendLine();
         sb.AppendLine("gzip -9 of the same buffers (for transfer/storage comparisons):");
         sb.AppendLine();
-        Table(sb, "Workload", new[] { "Tessera", "FlatBuffers", "MessagePack" }, workloads, (w, c) =>
+        Table(sb, "Workload", sizeBest, workloads, (w, c) =>
         {
             var row = sizes.FirstOrDefault(s => s.Workload == w && s.Library == c);
-            return row.Library == null ? "" : row.Gzip.ToString("N0", CultureInfo.InvariantCulture);
+            return row == null ? "" : row.Gzip.ToString("N0", CultureInfo.InvariantCulture);
         });
         sb.AppendLine();
 
         // ------------------------------------------------------------------ .NET write
-        string[] writeColumns = { "Tessera", "Tessera (no sharing)", "Tessera (full sharing)", "FlatBuffers", "MessagePack" };
+        string[] writeColumns =
+        {
+            "Tessera", "Tessera (no sharing)", "Tessera (full sharing)", "FlatBuffers", "MessagePack", "MemoryPack", "Protobuf", "Protobuf (prebuilt messages)",
+            "System.Text.Json", "Newtonsoft.Json",
+        };
+        // Full sharing searches for equal objects and prebuilt messages skip the conversion: both do other work than the rest.
+        string[] writeBest = writeColumns.Where(c => c is not ("Tessera (full sharing)" or "Protobuf (prebuilt messages)")).ToArray();
         sb.AppendLine("## .NET write (µs per buffer, lower is better)");
         sb.AppendLine();
-        sb.AppendLine("Object graph to `byte[]` with a reused writer/builder (each library's normal path). Tessera's default shares equal strings. Measured with BenchmarkDotNet: every case in a process of its own, with collections forced between iterations, and the large-object threshold raised to 4 MB, so result arrays die young like any other object (at the default 85 KB, the full collections that free them took time that varied erratically with the result's exact size). The table after this one leaves the final copy out.");
+        sb.AppendLine("Object graph to `byte[]` with a reused writer, builder or buffer (each library's normal path). Tessera's default shares equal strings. FlatBuffers is written with its builder API from the objects, and so is Protobuf: it writes its own generated message classes, which the objects are converted to on every write; \"Protobuf (prebuilt messages)\" leaves the conversion out, as when a program keeps its data in the messages. Both JSON libraries write the same JSON (System.Text.Json with its source-generated serializers). The fastest of the libraries that write from the objects is in bold.");
         sb.AppendLine();
-        Table(sb, "Workload", writeColumns, workloads, (w, c) => Fmt(write.FirstOrDefault(x => x.Workload == w && x.Library == c && x.Variant == "to byte[]").Us),
-            (w, c) => Best(write.Where(x => x.Workload == w && x.Variant == "to byte[]" && (x.Library == "Tessera" || x.Library == "FlatBuffers" || x.Library == "MessagePack" || x.Library == "Tessera (no sharing)")).Select(x => (x.Library, x.Us)), c));
+        sb.AppendLine("Measured with BenchmarkDotNet: every case in a process of its own, with collections forced between iterations, and the large-object threshold raised to 4 MB, so result arrays die young like any other object (at the default 85 KB, the full collections that free them took time that varied erratically with the result's exact size). The tables after this one leave the final copy out.");
         sb.AppendLine();
-        sb.AppendLine("Allocated bytes per write without the final copy (reused writer, builder or buffer):");
+        Table(sb, "Workload", writeColumns, workloads, (w, c) => Fmt(WriteUs(w, c)), (w, c) => Best(writeBest.Select(l => (l, WriteUs(w, l))), c));
         sb.AppendLine();
-        var noCopy = new Dictionary<string, string> { ["Tessera"] = "reused writer, no copy", ["FlatBuffers"] = "reused builder, no copy", ["MessagePack"] = "reused buffer, no copy" };
-        Table(sb, "Workload", noCopy.Keys.ToArray(), workloads, (w, c) =>
+        var noCopy = new (string Library, string Variant)[]
         {
-            var row = write.FirstOrDefault(x => x.Workload == w && x.Library == c && x.Variant == noCopy[c]);
-            return row.Library == null ? "" : $"{Fmt(row.Us)} µs, {row.Alloc.ToString("N0", CultureInfo.InvariantCulture)} B";
-        });
+            ("Tessera", "reused writer, no copy"), ("FlatBuffers", "reused builder, no copy"), ("MessagePack", "reused buffer, no copy"), ("MemoryPack", "reused buffer, no copy"),
+            ("Protobuf", "reused buffer, no copy"), ("System.Text.Json", "reused buffer, no copy"), ("Newtonsoft.Json", "reused buffer, no copy"),
+        };
+        string[] noCopyColumns = noCopy.Select(x => x.Library).ToArray();
+        Write? NoCopy(string w, string lib) => write.FirstOrDefault(x => x.Workload == w && x.Library == lib && x.Variant == noCopy.First(n => n.Library == lib).Variant);
+        sb.AppendLine("Without the final copy (into a reused writer, builder or buffer), µs:");
+        sb.AppendLine();
+        Table(sb, "Workload", noCopyColumns, workloads, (w, c) => NoCopy(w, c) is { } row ? Fmt(row.Us) : "",
+            (w, c) => Best(noCopyColumns.Select(l => (l, NoCopy(w, l)?.Us ?? 0)), c));
+        sb.AppendLine();
+        sb.AppendLine("Bytes allocated per write without the final copy:");
+        sb.AppendLine();
+        Table(sb, "Workload", noCopyColumns, workloads, (w, c) => NoCopy(w, c) is { } row ? row.Alloc.ToString("N0", CultureInfo.InvariantCulture) : "");
         sb.AppendLine();
 
         // ------------------------------------------------------------------ C++ read
+        sb.AppendLine("## C++ read");
+        sb.AppendLine();
+        sb.AppendLine("Tessera and FlatBuffers read the buffer where it lies. The parsers are each set up their fastest way, measured, and reuse their memory from one parse to the next:");
+        sb.AppendLine();
+        sb.AppendLine("- msgpack-cxx parses into a reused zone, with strings and binary data referenced in the buffer (its zero-copy option) rather than copied. Its tree for the traversal, random access and lookups is parsed once with the strings copied: that reads as fast and scans keys twice as fast.");
+        sb.AppendLine("- libprotobuf parses into a reused message object, as Google advises (a message keeps the memory it allocated when it is cleared). Its parsed tree for the traversal and random access is on an arena, which reads a few percent faster." + ArenaNote(natives, workloads));
+        sb.AppendLine("- simdjson reuses its parser. \"Verify\" parses into its DOM, which validates the whole document; the other operations stream through the document with its On-Demand API, its fastest way, computing the checksum without building a tree.");
+        sb.AppendLine();
         foreach (var native in natives)
         {
             var root = native.RootElement;
             var rows = ReadRows(root);
-            sb.AppendLine($"## C++ read — {root.GetProperty("compiler").GetString()} (µs, lower is better)");
+            sb.AppendLine($"### {root.GetProperty("compiler").GetString()} (µs, lower is better)");
             sb.AppendLine();
-            foreach (var (title, prefix) in new[]
+            foreach (var (title, prefix, parsed) in new[]
                      {
-                         ("Verify (MessagePack: parse into a tree)", "verify"),
-                         ("Full traversal of every field (MessagePack: over the already parsed tree)", "full traversal"),
-                         ("Verify + full traversal (safe end-to-end read)", "verify + traversal"),
-                         ("1000 random element reads (MessagePack: on the parsed tree)", "random access x1000"),
-                         ("Open + read one field", "open + read one field"),
+                         ("Verify (MessagePack, Protobuf and JSON: the parse)", "verify", false),
+                         ("Full traversal of every field (MessagePack and Protobuf: over the already parsed tree)", "full traversal", true),
+                         ("Verify + full traversal (safe end-to-end read)", "verify + traversal", false),
+                         ("1000 random element reads (MessagePack and Protobuf: on the parsed tree)", "random access x1000", true),
+                         ("Open + read one field (the parsers parse first)", "open + read one field", false),
                      })
             {
                 sb.AppendLine($"**{title}**");
                 sb.AppendLine();
-                string Cell(string w, string lib) => Fmt(Op(rows, w, lib, prefix));
-                var libs = new[] { "Tessera", "FlatBuffers", "MessagePack" };
-                Table(sb, "Workload", libs.Concat(new[] { "Tessera vs FlatBuffers" }).ToArray(), workloads, (w, c) =>
+                var libs = new[] { "Tessera", "FlatBuffers", "MessagePack", "Protobuf", "JSON" };
+                // Over a tree parsed beforehand, the parsers do less work than the zero-copy readers: only those two compete.
+                var compete = parsed ? new[] { "Tessera", "FlatBuffers" } : libs;
+                Table(sb, "Workload", libs.Append("Tessera vs FlatBuffers").ToArray(), workloads, (w, c) =>
                 {
-                    if (c != "Tessera vs FlatBuffers") return Cell(w, c);
+                    if (c != "Tessera vs FlatBuffers") return Fmt(Op(rows, w, c, prefix));
                     double a = Op(rows, w, "Tessera", prefix), b = Op(rows, w, "FlatBuffers", prefix);
                     if (a <= 0 || b <= 0) return "";
                     return a <= b ? $"{b / a:0.00}× faster" : $"{a / b:0.00}× slower";
-                }, (w, c) => c != "Tessera vs FlatBuffers" && Best(libs.Select(l => (l, Parse(Cell(w, l)))), c));
+                }, (w, c) => compete.Contains(c) && Best(compete.Select(l => (l, Op(rows, w, l, prefix))), c));
                 sb.AppendLine();
             }
         }
@@ -155,9 +205,9 @@ public static class Report
         {
             sb.AppendLine("## Dictionary lookups (µs per 1,000 lookups, lower is better)");
             sb.AppendLine();
-            sb.AppendLine("The lookup workload: a `Dictionary<string, Stock>` and a `Dictionary<int, double>` of 5,000 entries each, read with 1,000 keys that are present. Tessera and FlatBuffers store the keys sorted and binary-search them (`find`, `LookupByKey`). MessagePack's parsed tree has no index, so it is scanned.");
+            sb.AppendLine("The lookup workload: a `Dictionary<string, Stock>` and a `Dictionary<int, double>` of 5,000 entries each, read with 1,000 keys that are present. Tessera and FlatBuffers store the keys sorted and binary-search them (`find`, `LookupByKey`). MessagePack's parsed tree has no index, and neither have Protobuf's entries, so both are scanned: the benchmark's Protobuf schema has repeated key-value entries, because a map field would parse into a hash map, whose order is unspecified.");
             sb.AppendLine();
-            var lookupColumns = new[] { "Tessera", "FlatBuffers", "MessagePack" };
+            var lookupColumns = new[] { "Tessera", "FlatBuffers", "MessagePack", "Protobuf" };
             foreach (var (title, prefix) in new[] { ("By string", "1000 lookups by string"), ("By int", "1000 lookups by int") })
             {
                 sb.AppendLine($"**{title}**");
@@ -179,9 +229,8 @@ public static class Report
             sb.AppendLine();
             var metrics = new List<(string Label, double Plain, double Fixed, bool Bytes)>
             {
-                ("Size (bytes)", sizes.First(s => s.Workload == w && s.Library == "Tessera").Bytes, sizes.First(s => s.Workload == w && s.Library == "Tessera (fixed)").Bytes, true),
-                (".NET write (µs)", write.FirstOrDefault(x => x.Workload == w && x.Library == "Tessera" && x.Variant == "to byte[]").Us,
-                    write.FirstOrDefault(x => x.Workload == w && x.Library == "Tessera (fixed)" && x.Variant == "to byte[]").Us, false),
+                ("Size (bytes)", Bytes(w, "Tessera"), Bytes(w, "Tessera (fixed)"), true),
+                (".NET write (µs)", WriteUs(w, "Tessera"), WriteUs(w, "Tessera (fixed)"), false),
             };
             foreach (var native in natives)
             {
@@ -208,12 +257,38 @@ public static class Report
         return sb.ToString();
     }
 
+    /// <summary>The C++ rows of the summary: label, operation, and whether the parsers take part (only where their parse is included).</summary>
+    internal static readonly (string Label, string Prefix, bool Parsers)[] SummaryReads =
+    {
+        ("verify", "verify", true), ("full traversal", "full traversal", false), ("verify + traversal", "verify + traversal", true), ("random access", "random access x1000", false),
+    };
+
     /// <summary>Closer than this is within run-to-run noise.</summary>
     private const double SlowerMargin = 1.05;
 
+    /// <summary>Where a new arena per parse beats the reused message for Protobuf, per compiler.</summary>
+    private static string ArenaNote(List<JsonDocument> natives, string[] workloads)
+    {
+        var parts = new List<string>();
+        foreach (string w in workloads)
+        {
+            var faster = new List<string>();
+            foreach (var native in natives)
+            {
+                var rows = ReadRows(native.RootElement);
+                double reused = Op(rows, w, "Protobuf", "verify"), arena = Op(rows, w, "Protobuf", "parse with a new arena");
+                if (reused > 0 && arena > 0 && arena < reused)
+                    faster.Add($"{native.RootElement.GetProperty("compiler").GetString()} {Fmt(arena)} µs instead of {Fmt(reused)}");
+            }
+
+            if (faster.Count > 0) parts.Add($"{w} ({string.Join("; ", faster)})");
+        }
+
+        return parts.Count == 0 ? "" : $" A new arena per parse, the other fast way, is faster on {string.Join(", ", parts)}: there every element replaces a oneof's member, which a reused message allocates anew.";
+    }
+
     /// <summary>The cases in which Tessera loses, computed from the results, each with its cause.</summary>
-    private static List<string> Slower(List<JsonDocument> natives, string[] workloads,
-        List<(string Workload, string Library, string Variant, double Us, double Alloc)> write, List<(string Workload, string Library, int Bytes, int Gzip)> sizes)
+    private static List<string> Slower(List<JsonDocument> natives, string[] workloads, List<Write> write, List<Size> sizes)
     {
         var lines = new List<string>();
         string X(double r) => r.ToString("0.00", CultureInfo.InvariantCulture) + "×";
@@ -246,25 +321,53 @@ public static class Report
             if (parts.Count > 0) lines.Add($"**{title}** (FlatBuffers faster): {string.Join("; ", parts)}.{(because.Length > 0 ? " " + because : "")}");
         }
 
-        // .NET write: the workloads where FlatBuffers or MessagePack write faster.
-        foreach (string other in new[] { "FlatBuffers", "MessagePack" })
+        // C++ reads against the parsers, where their parse is included.
+        foreach (string parser in Parsers)
         {
-            double Us(string w, string lib) => write.FirstOrDefault(x => x.Workload == w && x.Library == lib && x.Variant == "to byte[]").Us;
+            foreach (var (prefix, title) in new[] { ("verify", "Verify"), ("verify + traversal", "Verify, then read every field"), ("open + read one field", "Opening a buffer and reading one field"), ("1000 lookups", "Dictionary lookups") })
+            {
+                var parts = new List<string>();
+                foreach (var native in natives)
+                {
+                    var rows = ReadRows(native.RootElement);
+                    var slow = workloads.Select(w => (w, Ratio: Op(rows, w, "Tessera", prefix) / Op(rows, w, parser, prefix)))
+                        .Where(x => !double.IsNaN(x.Ratio) && !double.IsInfinity(x.Ratio) && x.Ratio > SlowerMargin).ToList();
+                    if (slow.Count > 0) parts.Add($"{native.RootElement.GetProperty("compiler").GetString()}: {string.Join(", ", slow.Select(x => $"{x.w} {X(x.Ratio)}"))}");
+                }
+
+                if (parts.Count > 0) lines.Add($"**{title}** ({parser} faster): {string.Join("; ", parts)}.");
+            }
+        }
+
+        // .NET write: the workloads where another library writes faster.
+        foreach (string other in new[] { "FlatBuffers", "MessagePack", "MemoryPack", "Protobuf", "System.Text.Json", "Newtonsoft.Json" })
+        {
+            double Us(string w, string lib) => write.FirstOrDefault(x => x.Workload == w && x.Library == lib && x.Variant == "to byte[]")?.Us ?? 0;
             var slow = workloads.Select(w => (w, Ratio: Us(w, "Tessera") / Us(w, other))).Where(x => x.Ratio > 1 && !double.IsInfinity(x.Ratio)).ToList();
             if (slow.Count == 0) continue;
-            string why = slow.Any(x => x.w == "lookup")
-                ? " The lookup workload writes dictionaries, which Tessera stores as sorted keys (so that C++ can binary-search them) and a separate vector of values; MessagePack writes the entries as they come, inline, and can then only scan them."
-                : "";
+            string why = other switch
+            {
+                "MessagePack" when slow.Any(x => x.w == "lookup") =>
+                    " The lookup workload writes dictionaries, which Tessera stores as sorted keys (so that C++ can binary-search them) and a separate vector of values; MessagePack writes the entries as they come, inline, and can then only scan them.",
+                "MemoryPack" => " MemoryPack writes the members one after another, with nothing that lets a reader find one without reading those before it, and copies arrays of plain structs as they lie in memory; it can only be read from the start, and only by .NET.",
+                _ => "",
+            };
             lines.Add($"**.NET write** ({other} faster): {string.Join(", ", slow.Select(x => $"{x.w} {X(x.Ratio)}"))}.{why}");
         }
 
-        // Size: the workloads where FlatBuffers or MessagePack buffers are smaller.
-        foreach (string other in new[] { "FlatBuffers", "MessagePack" })
+        // Size: the workloads where another library's buffer is smaller.
+        foreach (string other in new[] { "FlatBuffers", "MessagePack", "Protobuf", "MemoryPack", "JSON" })
         {
-            double Bytes(string w, string lib) => sizes.FirstOrDefault(s => s.Workload == w && s.Library == lib).Bytes;
+            double Bytes(string w, string lib) => sizes.FirstOrDefault(s => s.Workload == w && s.Library == lib)?.Bytes ?? 0;
             var smaller = workloads.Select(w => (w, Ratio: Bytes(w, "Tessera") / Bytes(w, other))).Where(x => x.Ratio > 1 && !double.IsInfinity(x.Ratio)).ToList();
             if (smaller.Count == 0) continue;
-            string why = other == "MessagePack" ? " MessagePack stores small integers in one or two bytes; Tessera keeps values fixed-width so they can be read in place." : "";
+            string why = other switch
+            {
+                "MessagePack" => " MessagePack stores small integers in one or two bytes; Tessera keeps values fixed-width so they can be read in place.",
+                "Protobuf" => " Protobuf stores integers as varints (one byte for small values) and leaves out zeros; Tessera keeps values fixed-width so they can be read in place.",
+                "MemoryPack" => " MemoryPack writes the members one after another, with nothing that lets a reader find one without reading those before it; Tessera stores the offsets that let C++ read any member directly.",
+                _ => "",
+            };
             lines.Add($"**Size** ({other} smaller): {string.Join(", ", smaller.Select(x => $"{x.w} {X(x.Ratio)}"))}.{why}");
         }
 
@@ -279,13 +382,13 @@ public static class Report
         return ns.Count == 0 ? "" : $"Both take {ns.Min().ToString("0", CultureInfo.InvariantCulture)}–{ns.Max().ToString("0", CultureInfo.InvariantCulture)} ns.";
     }
 
-    private static List<(string Workload, string Library, string Op, double Us)> ReadRows(JsonElement root) =>
+    internal static List<(string Workload, string Library, string Op, double Us)> ReadRows(JsonElement root) =>
         root.GetProperty("read").EnumerateArray()
             .Select(r => (r.GetProperty("workload").GetString()!, r.GetProperty("library").GetString()!, r.GetProperty("operation").GetString()!, r.GetProperty("median_us").GetDouble()))
             .ToList();
 
     /// <summary>Median µs of the operation whose name starts with <paramref name="prefix"/> ("verify" excludes "verify + traversal").</summary>
-    private static double Op(List<(string Workload, string Library, string Op, double Us)> rows, string workload, string library, string prefix) =>
+    internal static double Op(List<(string Workload, string Library, string Op, double Us)> rows, string workload, string library, string prefix) =>
         rows.FirstOrDefault(r => r.Workload == workload && r.Library == library && r.Op.StartsWith(prefix, StringComparison.Ordinal) &&
                                  (prefix != "verify" || !r.Op.Contains("traversal", StringComparison.Ordinal))).Us;
 
@@ -313,6 +416,4 @@ public static class Report
     }
 
     private static string Fmt(double us) => us <= 0 ? "" : us >= 100 ? us.ToString("N0", CultureInfo.InvariantCulture) : us >= 10 ? us.ToString("0.0", CultureInfo.InvariantCulture) : us >= 0.1 ? us.ToString("0.00", CultureInfo.InvariantCulture) : us.ToString("0.0000", CultureInfo.InvariantCulture);
-
-    private static double Parse(string s) => double.TryParse(s.Replace(",", ""), NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : 0;
 }

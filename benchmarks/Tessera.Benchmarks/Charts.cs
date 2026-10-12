@@ -11,16 +11,31 @@ namespace Bench;
 /// <summary>
 /// SVG bar charts of benchmarks/results/*.json for the README, in a light and a dark variant (GitHub picks one with
 /// &lt;picture&gt;). Times-better charts use a log scale centred on 1×, so 2× better and 2× worse are the same length.
+/// Every library keeps its color in every chart.
 /// </summary>
 public static class Charts
 {
-    private sealed record Theme(string Name, string Fg, string Muted, string Grid, string Tessera, string FlatBuffers, string MessagePack, string[] Compilers);
+    private sealed record Theme(string Name, string Fg, string Muted, string Grid, string Tessera, string FlatBuffers, string MessagePack, string Protobuf,
+        string Json, string MemoryPack, string[] Compilers)
+    {
+        /// <summary>A library's color, by the names the results use.</summary>
+        public string Of(string library) => library switch
+        {
+            "Tessera" => Tessera,
+            "FlatBuffers" => FlatBuffers,
+            "MessagePack" => MessagePack,
+            "Protobuf" => Protobuf,
+            "JSON" or "System.Text.Json" => Json,
+            "MemoryPack" => MemoryPack,
+            _ => Muted,
+        };
+    }
 
     private static readonly Theme[] Themes =
     {
         // Tessera in the brand colors: deep teal #075366 and turquoise #15CFC5, cream #FFF5E5 on dark backgrounds.
-        new("light", "#1f2328", "#59636e", "#d1d9e0", "#075366", "#8c959f", "#8a63d2", new[] { "#075366", "#0e8f96", "#15cfc5" }),
-        new("dark", "#e6edf3", "#9198a1", "#3d444d", "#15cfc5", "#848d97", "#b392f0", new[] { "#fff5e5", "#15cfc5", "#0e8f96" }),
+        new("light", "#1f2328", "#59636e", "#d1d9e0", "#075366", "#8c959f", "#8a63d2", "#bc4c00", "#bf3989", "#0969da", new[] { "#075366", "#0e8f96", "#15cfc5" }),
+        new("dark", "#e6edf3", "#9198a1", "#3d444d", "#15cfc5", "#848d97", "#b392f0", "#f0883e", "#db61a2", "#4493f8", new[] { "#fff5e5", "#15cfc5", "#0e8f96" }),
     };
 
     private const int Width = 860, LabelX = 16, PlotLeft = 210, PlotRight = Width - 90;
@@ -61,26 +76,29 @@ public static class Charts
             return r.Count == 0 ? 0 : Math.Exp(r.Average());
         }
 
-        // 1. Summary: times better than FlatBuffers and MessagePack (geometric means over the workloads).
+        // 1. Summary: times better than each library (geometric means over the workloads), where it was measured. The
+        //    parsers' traversal and random access read a tree parsed beforehand, so they are left out of those rows.
+        var rivals = Report.Rivals;
+        double Versus(string? other, Func<string, string, double> metric) => other == null ? double.NaN : Geo(w => metric(w, other), w => metric(w, "Tessera"));
         var summary = new List<(string Group, string Label, double[] Values)>
         {
-            ("Size", "", new[] { Geo(w => Size(w, "FlatBuffers"), w => Size(w, "Tessera")), Geo(w => Size(w, "MessagePack"), w => Size(w, "Tessera")) }),
-            (".NET write", "", new[] { Geo(w => WriteUs(w, "FlatBuffers"), w => WriteUs(w, "Tessera")), Geo(w => WriteUs(w, "MessagePack"), w => WriteUs(w, "Tessera")) }),
+            ("Size", "", rivals.Select(r => Versus(r.Size, Size)).ToArray()),
+            (".NET write", "", rivals.Select(r => Versus(r.Write, WriteUs)).ToArray()),
         };
-        foreach (var (title, prefix, mp) in new[] { ("Verify", "verify", true), ("Verify + read every field", "verify + traversal", true), ("Read every field (trusted)", "full traversal", false), ("1,000 random reads", "random access x1000", false) })
+        foreach (var (title, prefix, parsers) in new[] { ("Verify", "verify", true), ("Verify + read every field", "verify + traversal", true), ("Read every field (trusted)", "full traversal", false), ("1,000 random reads", "random access x1000", false) })
         {
             foreach (var (compiler, reads) in natives)
             {
-                double fb = Geo(w => Op(reads, w, "FlatBuffers", prefix), w => Op(reads, w, "Tessera", prefix));
-                double m = mp ? Geo(w => Op(reads, w, "MessagePack", prefix), w => Op(reads, w, "Tessera", prefix)) : double.NaN;
-                summary.Add((title, compiler, new[] { fb, m }));
+                summary.Add((title, compiler, rivals.Select(r => r.Read is { } name && (parsers || !Report.Parsers.Contains(name))
+                    ? Versus(name, (w, lib) => Op(reads, w, lib, prefix)) : double.NaN).ToArray()));
             }
         }
 
-        // 2-3. Per-workload absolute numbers.
-        string[] libs = { "Tessera", "FlatBuffers", "MessagePack" };
-        var writeRows = workloads.Select(w => (w, libs.Select(l => WriteUs(w, l)).ToArray())).ToList();
-        var sizeRows = workloads.Select(w => (w, libs.Select(l => Size(w, l)).ToArray())).ToList();
+        // 2-3. Per-workload absolute numbers. Newtonsoft.Json, several times slower than System.Text.Json, is in the tables only.
+        string[] writeLibs = { "Tessera", "FlatBuffers", "MessagePack", "MemoryPack", "Protobuf", "System.Text.Json" };
+        string[] sizeLibs = { "Tessera", "FlatBuffers", "MessagePack", "MemoryPack", "Protobuf", "JSON" };
+        var writeRows = workloads.Select(w => (w, writeLibs.Select(l => WriteUs(w, l)).ToArray())).ToList();
+        var sizeRows = workloads.Select(w => (w, sizeLibs.Select(l => Size(w, l)).ToArray())).ToList();
 
         // 4-5. Tessera against FlatBuffers per workload, per compiler.
         List<(string, double[])> PerWorkload(string prefix) =>
@@ -92,21 +110,21 @@ public static class Charts
         foreach (var (title, prefix, kind) in new[] { ("By string", "1000 lookups by string", "string"), ("By int", "1000 lookups by int", "int") })
         {
             foreach (var (compiler, reads) in natives) lookups.Add((title, compiler, new[] { Op(reads, "lookup", "Tessera", prefix), Op(reads, "lookup", "FlatBuffers", prefix) }));
-            var ms = natives.Select(n => Op(n.Reads, "lookup", "MessagePack", prefix) / 1000).Where(x => x > 0).ToList();
+            var ms = natives.SelectMany(n => new[] { "MessagePack", "Protobuf" }.Select(l => Op(n.Reads, "lookup", l, prefix) / 1000)).Where(x => x > 0).ToList();
             if (ms.Count > 0) scans.Add($"{ms.Min().ToString("0.0", Inv)}–{ms.Max().ToString("0.0", Inv)} ms by {kind}");
         }
 
-        string scan = scans.Count > 0 ? $" MessagePack scans its parsed tree ({string.Join(", ", scans)}) and is left out." : "";
+        string scan = scans.Count > 0 ? $" MessagePack and Protobuf scan their parsed trees ({string.Join(", ", scans)}) and are left out." : "";
 
         string[] compilers = natives.Select(n => n.Compiler).ToArray();
         foreach (var t in Themes)
         {
             Save(outDir, "summary", t, RatioChart(t, "Tessera, times better", "Geometric mean over the " + workloads.Length + " workloads. Right of 1× Tessera is better; log scale.",
-                new[] { ("vs FlatBuffers", t.Tessera), ("vs MessagePack", t.MessagePack) }, summary, 0.25, 16));
+                rivals.Select(r => ("vs " + r.Name, t.Of(r.Name))).ToArray(), summary, 0.25, 64));
             Save(outDir, "write", t, GroupedChart(t, ".NET write", "Microseconds per buffer, to byte[]; shorter is better. Each workload has its own scale.",
-                libs.Select((l, i) => (l, new[] { t.Tessera, t.FlatBuffers, t.MessagePack }[i])).ToArray(), writeRows, Us));
+                writeLibs.Select(l => (l, t.Of(l))).ToArray(), writeRows, Us));
             Save(outDir, "size", t, GroupedChart(t, "Buffer size", "Bytes; shorter is better. Each workload has its own scale.",
-                libs.Select((l, i) => (l, new[] { t.Tessera, t.FlatBuffers, t.MessagePack }[i])).ToArray(), sizeRows, b => b.ToString("N0", Inv)));
+                sizeLibs.Select(l => (l, t.Of(l))).ToArray(), sizeRows, b => b.ToString("N0", Inv)));
             Save(outDir, "safe-read", t, RatioChart(t, "Verify, then read every field: Tessera vs FlatBuffers", "Times faster per workload. Right of 1× Tessera is faster; log scale.",
                 compilers.Select((c, i) => (c, t.Compilers[i % t.Compilers.Length])).ToArray(), PerWorkload("verify + traversal").Select(r => (r.Item1, "", r.Item2)).ToList(), 0.25, 4));
             Save(outDir, "random-access", t, RatioChart(t, "1,000 random reads: Tessera vs FlatBuffers", "Times faster per workload. Left of 1× Tessera is slower; log scale.",
@@ -143,26 +161,40 @@ public static class Charts
     {
         Text(sb, LabelX, 24, title, t.Fg, 16, bold: true);
         Text(sb, LabelX, 44, subtitle, t.Muted, 12);
-        double x = LabelX;
+        double x = LabelX, y = 56;
         foreach (var (name, color) in legend)
         {
-            sb.Append($"<rect x=\"{F(x)}\" y=\"56\" width=\"12\" height=\"12\" rx=\"2\" fill=\"{color}\"/>");
-            Text(sb, x + 18, 66.5, name, t.Muted, 12);
-            x += 30 + name.Length * 7;
+            double w = 30 + name.Length * 7;
+            if (x + w > Width - LabelX && x > LabelX)
+            {
+                x = LabelX;  // wrap the legend
+                y += 20;
+            }
+
+            sb.Append($"<rect x=\"{F(x)}\" y=\"{F(y)}\" width=\"12\" height=\"12\" rx=\"2\" fill=\"{color}\"/>");
+            Text(sb, x + 18, y + 10.5, name, t.Muted, 12);
+            x += w;
         }
 
-        return 86;
+        return y + 30;
     }
 
-    /// <summary>Diverging bars on a log scale from <paramref name="min"/>× to <paramref name="max"/>×, one bar per series and row.</summary>
+    /// <summary>
+    /// Diverging bars on a log scale from <paramref name="min"/>× to <paramref name="max"/>×, one bar per series and row;
+    /// a row has room only for the series it has a value for (NaN: not measured).
+    /// </summary>
     private static string RatioChart(Theme t, string title, string subtitle, (string Name, string Color)[] series, List<(string Group, string Label, double[] Values)> rows, double min, double max)
     {
         var sb = new StringBuilder();
         double top = Header(sb, t, title, subtitle, series);
         double X(double v) => PlotLeft + (PlotRight - PlotLeft) * (Math.Log2(Math.Clamp(v, min, max)) - Math.Log2(min)) / (Math.Log2(max) - Math.Log2(min));
         const double bar = 9, gap = 3, rowGap = 9, groupGap = 10;
-        int n = series.Length;
-        double rowH = n * bar + (n - 1) * gap;
+        static bool Has(double v) => !double.IsNaN(v) && v > 0;
+        double RowH(double[] values)
+        {
+            int k = Math.Max(1, values.Count(Has));
+            return k * bar + (k - 1) * gap;
+        }
 
         // Layout first, so the grid can span the plot.
         var y = new List<double>();
@@ -173,7 +205,7 @@ public static class Charts
             if (r.Group != last && last != null) cy += groupGap;
             if (r.Label.Length > 0 && r.Group != last) cy += 16;  // group heading above labelled rows
             y.Add(cy);
-            cy += rowH + rowGap;
+            cy += RowH(r.Values) + rowGap;
             last = r.Group;
         }
 
@@ -188,6 +220,7 @@ public static class Charts
         for (int i = 0; i < rows.Count; i++)
         {
             var r = rows[i];
+            double rowH = RowH(r.Values);
             if (r.Label.Length > 0)
             {
                 if (r.Group != last) Text(sb, LabelX, y[i] - 6, r.Group, t.Fg, 13, bold: true);
@@ -199,11 +232,12 @@ public static class Charts
             }
 
             last = r.Group;
-            for (int s = 0; s < n; s++)
+            int slot = 0;
+            for (int s = 0; s < series.Length; s++)
             {
                 double v = r.Values[s];
-                if (double.IsNaN(v) || v <= 0) continue;
-                double by = y[i] + s * (bar + gap), x0 = X(1), x1 = X(v);
+                if (!Has(v)) continue;
+                double by = y[i] + slot++ * (bar + gap), x0 = X(1), x1 = X(v);
                 double left = Math.Min(x0, x1), w = Math.Max(1.5, Math.Abs(x1 - x0));
                 sb.Append($"<rect x=\"{F(left)}\" y=\"{F(by)}\" width=\"{F(w)}\" height=\"{F(bar)}\" rx=\"1.5\" fill=\"{series[s].Color}\"/>");
                 string label = v.ToString(v >= 10 ? "0.0" : "0.00", Inv) + "×";

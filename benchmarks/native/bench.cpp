@@ -1,8 +1,11 @@
-// C++ read benchmark: Tessera vs FlatBuffers vs MessagePack (msgpack-cxx) on buffers written by
-// benchmarks/Tessera.Benchmarks. Every reader must reproduce the C# checksum before anything is timed.
+// C++ read benchmark: Tessera vs FlatBuffers, MessagePack (msgpack-cxx), Protocol Buffers (libprotobuf) and JSON
+// (simdjson) on buffers written by benchmarks/Tessera.Benchmarks. Every reader must reproduce the C# checksum before
+// anything is timed.
 //
 // usage: tessera_bench <generated/data dir> [--rounds N] [--round-ms N] [--json out.json] [--filter text]
 //   --filter keeps only cases whose "workload/library/operation" contains the text (for focused tuning).
+#include "json_readers.hpp"
+#include "pb_readers.hpp"
 #include "readers.hpp"
 
 #include <algorithm>
@@ -40,6 +43,10 @@ struct Buffer {
     std::unique_ptr<std::uint64_t[]> storage;  // 8-byte aligned, as a file loaded by an engine would be
     std::size_t size = 0;
     const std::uint8_t* data() const { return reinterpret_cast<const std::uint8_t*>(storage.get()); }
+    // simdjson reads up to SIMDJSON_PADDING bytes past the end; the storage has them (zeros), so it parses in place.
+    simdjson::padded_string_view json() const {
+        return simdjson::padded_string_view(reinterpret_cast<const char*>(data()), size, size + simdjson::SIMDJSON_PADDING);
+    }
 };
 
 Buffer load(const std::string& path) {
@@ -50,7 +57,7 @@ Buffer load(const std::string& path) {
     }
     Buffer b;
     b.size = static_cast<std::size_t>(f.tellg());
-    b.storage.reset(new std::uint64_t[(b.size + 7) / 8]());
+    b.storage.reset(new std::uint64_t[(b.size + simdjson::SIMDJSON_PADDING + 7) / 8]());
     f.seekg(0);
     f.read(reinterpret_cast<char*>(b.storage.get()), static_cast<std::streamsize>(b.size));
     return b;
@@ -138,13 +145,21 @@ int main(int argc, char** argv) {
 
     std::map<std::string, Buffer> buffers;
     for (const char* w : {"prefab", "monsters", "records", "series", "dense-unique", "sparse-unique", "dense-shared", "lookup", "canada"})
-        for (const char* lib : {"tessera", "tessera-all", "tessera-noshare", "fb", "msgpack"})
+        for (const char* lib : {"tessera", "tessera-all", "tessera-noshare", "fb", "msgpack", "json", "json-newtonsoft", "protobuf"})
             buffers[std::string(w) + "." + lib] = load(dir + "/" + w + "." + lib + ".bin");
     buffers["series.tessera-fixed"] = load(dir + "/series.tessera-fixed.bin");
     std::map<std::string, std::shared_ptr<std::vector<std::uint32_t>>> picks_of;
+    // What Tessera reads with those random picks, and the element "open + read one field" reads with what Tessera reads
+    // there (the other formats must agree).
+    std::map<std::string, std::uint64_t> picks_sum_of;
+    std::map<std::string, std::uint32_t> mid_of;
+    std::map<std::string, std::uint64_t> mid_value_of;
 
-    // Parsed MessagePack trees kept alive for the traversal/random-access cases (parse cost is measured separately).
+    // Parsed MessagePack trees and Protobuf messages kept alive for the traversal/random-access cases (parse cost is
+    // measured separately).
     std::vector<msgpack::object_handle> parsed;
+    std::vector<std::unique_ptr<google::protobuf::Arena>> pb_arenas;
+    std::map<std::string, const google::protobuf::Message*> pb_tree_of;
     std::vector<Case> cases;
     bool ok = true;
     std::mt19937 rng(7);
@@ -247,6 +262,8 @@ int main(int argc, char** argv) {
         }, {}});
 
         const std::uint32_t mid = n / 2;
+        mid_of[w] = mid;
+        mid_value_of[w] = tessera_pick(tessera::root_unchecked<TesseraRoot>(inp), mid);
         // Trusted open, like flatbuffers::GetRoot (no checks). tessera::Reader adds header and schema checks (~10 ns).
         cases.push_back({w, "Tessera", "open + read one field", [=] { return tessera_pick(tessera::root_unchecked<TesseraRoot>(inp), mid); }, {}});
         cases.push_back({w, "FlatBuffers", "open + read one field", [=] { return fb_pick(fb_root(fbp), mid); }, {}});
@@ -297,7 +314,102 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "RANDOM ACCESS MISMATCH %s: %llu %llu %llu %llu\n", w.c_str(), (unsigned long long)a, (unsigned long long)a2, (unsigned long long)b, (unsigned long long)c);
             ok = false;
         }
+        picks_sum_of[w] = a;
     };
+
+    // JSON, read with simdjson. "verify (parse)" parses the whole document (validating it), like MessagePack's parse
+    // into a tree; "verify + traversal" streams through it with the On-Demand API, simdjson's fastest way, computing
+    // the checksum without building a tree. Both JSON libraries' buffers must give the C# checksum; System.Text.Json's
+    // is timed (the two contain the same JSON, apart from number formatting).
+    auto add_json = [&](const std::string& w, auto walk, auto pick) {
+        const Buffer& stj = buffers[w + ".json"];
+        const Buffer& nj = buffers[w + ".json-newtonsoft"];
+        const std::uint64_t want = expected[w];
+        auto parser = std::make_shared<simdjson::ondemand::parser>();
+        auto dom = std::make_shared<simdjson::dom::parser>();
+        const std::uint32_t mid = mid_of[w];
+        try {
+            for (const auto& [b, name] : {std::pair{&stj, ".json"}, std::pair{&nj, ".json-newtonsoft"}}) {
+                simdjson::ondemand::document doc = parser->iterate(b->json());
+                check(w + name, walk(doc), want);
+            }
+            simdjson::ondemand::document doc = parser->iterate(stj.json());
+            if (pick(doc, mid) != mid_value_of[w]) {
+                std::fprintf(stderr, "OPEN + READ ONE FIELD MISMATCH %s (JSON)\n", w.c_str());
+                ok = false;
+            }
+        } catch (const simdjson::simdjson_error& e) {
+            std::fprintf(stderr, "%s (JSON): %s\n", w.c_str(), e.what());
+            ok = false;
+        }
+        const char* jsp = reinterpret_cast<const char*>(stj.data());
+        const std::size_t jss = stj.size;
+        const auto view = stj.json();
+        cases.push_back({w, "JSON", "verify (parse)", [=] {
+            simdjson::dom::element root = dom->parse(jsp, jss, false);
+            return static_cast<std::uint64_t>(root.is_object());
+        }, {}});
+        cases.push_back({w, "JSON", "verify + traversal", [=] {
+            simdjson::ondemand::document doc = parser->iterate(view);
+            return walk(doc);
+        }, {}});
+        cases.push_back({w, "JSON", "open + read one field", [=] {
+            simdjson::ondemand::document doc = parser->iterate(view);
+            return pick(doc, mid);
+        }, {}});
+    };
+
+    // Protocol Buffers, read with libprotobuf: a parse into message objects, which validates the buffer, like
+    // MessagePack's parse into a tree; the traversal and random access read the parsed messages. A parse cannot stop
+    // early, so reading one field parses everything. Each library gets its fastest way, measured:
+    // - the parses reuse one message, as Google advises (a message keeps the memory it allocated when it is cleared,
+    //   and a parse clears it first). That beats a new arena per parse, except where a oneof's member is replaced in
+    //   every element (prefab), so "parse with a new arena" is timed too, for the report to show;
+    // - the parsed tree that the traversal and random access read is on an arena (its objects are packed together),
+    //   which reads a few percent faster than one in separately allocated objects.
+    auto add_protobuf = [&](const std::string& w, auto tag, auto walk, auto pick) {
+        using Message = typename decltype(tag)::type;
+        const Buffer& b = buffers[w + ".protobuf"];
+        const std::uint8_t* pbp = b.data();
+        const int pbs = static_cast<int>(b.size);
+        const std::uint32_t mid = mid_of[w];
+        const auto picks = picks_of[w];
+        pb_arenas.push_back(std::make_unique<google::protobuf::Arena>());
+        Message* tree = google::protobuf::Arena::Create<Message>(pb_arenas.back().get());
+        if (!tree->ParseFromArray(pbp, pbs)) {
+            std::fprintf(stderr, "%s (Protobuf): parse failed\n", w.c_str());
+            ok = false;
+            return;
+        }
+        pb_tree_of[w] = tree;
+        check(w + ".protobuf", walk(*tree), expected[w]);
+        if (pick(*tree, mid) != mid_value_of[w]) {
+            std::fprintf(stderr, "OPEN + READ ONE FIELD MISMATCH %s (Protobuf)\n", w.c_str());
+            ok = false;
+        }
+        std::uint64_t sum = 0;
+        for (std::uint32_t i : *picks) sum += pick(*tree, i);
+        if (sum != picks_sum_of[w]) {
+            std::fprintf(stderr, "RANDOM ACCESS MISMATCH %s (Protobuf)\n", w.c_str());
+            ok = false;
+        }
+        const Message* t = tree;
+        auto reused = std::make_shared<Message>();
+        cases.push_back({w, "Protobuf", "verify (parse)", [=] { return static_cast<std::uint64_t>(reused->ParseFromArray(pbp, pbs)); }, {}});
+        cases.push_back({w, "Protobuf", "parse with a new arena", [=] {
+            google::protobuf::Arena arena;
+            return static_cast<std::uint64_t>(google::protobuf::Arena::Create<Message>(&arena)->ParseFromArray(pbp, pbs));
+        }, {}});
+        cases.push_back({w, "Protobuf", "full traversal (parsed tree)", [=] { return walk(*t); }, {}});
+        cases.push_back({w, "Protobuf", "verify + traversal", [=] { return reused->ParseFromArray(pbp, pbs) ? walk(*reused) : 0; }, {}});
+        cases.push_back({w, "Protobuf", "random access x1000 (parsed tree)", [=] {
+            std::uint64_t s = 0;
+            for (std::uint32_t i : *picks) s += pick(*t, i);
+            return s;
+        }, {}});
+        cases.push_back({w, "Protobuf", "open + read one field", [=] { return reused->ParseFromArray(pbp, pbs) ? pick(*reused, mid) : 0; }, {}});
+    };
+    using std::type_identity;
 
     using mp_read::at;
     using mp_read::integer;
@@ -321,6 +433,8 @@ int main(int argc, char** argv) {
                    (comps.type == msgpack::type::NIL ? 0 : comps.via.array.size) + integer(at(o, 10));
         },
         [](im::Prefab p) { return p.objects().size(); });
+    add_json("prefab", json_read::prefab, json_read::prefab_pick);
+    add_protobuf("prefab", type_identity<pbm::Prefab>{}, pb_read::prefab, pb_read::prefab_pick);
 
     add_workload(
         "monsters", im::World{}, tessera_read::world, [](const std::uint8_t* p) { return flatbuffers::GetRoot<fbm::World>(p); },
@@ -342,6 +456,8 @@ int main(int argc, char** argv) {
                    (weapons.type == msgpack::type::NIL ? 0 : weapons.via.array.size) + (name.type == msgpack::type::NIL ? 0 : name.via.str.size);
         },
         [](im::World w) { return w.monsters().size(); });
+    add_json("monsters", json_read::world, json_read::world_pick);
+    add_protobuf("monsters", type_identity<pbm::World>{}, pb_read::world, pb_read::world_pick);
 
     add_workload(
         "records", im::RecordSet{}, tessera_read::records, [](const std::uint8_t* p) { return flatbuffers::GetRoot<fbm::RecordSet>(p); },
@@ -365,6 +481,8 @@ int main(int argc, char** argv) {
                    static_cast<std::uint64_t>(f3.type == msgpack::type::NIL ? 2.f : mp_read::f32(f3)) + (b5.type == msgpack::type::NIL ? true : b5.via.boolean);
         },
         [](im::RecordSet s) { return s.records().size(); });
+    add_json("records", json_read::records, json_read::records_pick);
+    add_protobuf("records", type_identity<pbm::RecordSet>{}, pb_read::records, pb_read::records_pick);
 
     add_workload(
         "series", im::Series{}, tessera_read::series, [](const std::uint8_t* p) { return flatbuffers::GetRoot<fbm::Series>(p); },
@@ -382,6 +500,8 @@ int main(int argc, char** argv) {
             return static_cast<std::uint64_t>(at(x, 1).via.f64) + integer(at(x, 0));
         },
         [](im::Series s) { return s.samples().size(); });
+    add_json("series", json_read::series, json_read::series_pick);
+    add_protobuf("series", type_identity<pbm::Series>{}, pb_read::series, pb_read::series_pick);
 
     // Scene graphs of 1,024 nodes: dense, sparse, and 16 distinct nodes repeated.
     for (const char* sw : {"dense-unique", "sparse-unique", "dense-shared"}) {
@@ -405,6 +525,8 @@ int main(int argc, char** argv) {
                        (at(n, 6).type == msgpack::type::NIL ? 0 : integer(at(n, 6)));
             },
             [](im::Scene s) { return s.nodes().size(); });
+        add_json(sw, json_read::scene, json_read::scene_pick);
+        add_protobuf(sw, type_identity<pbm::Scene>{}, pb_read::scene, pb_read::scene_pick);
     }
 
     // Dictionaries: Tessera maps and FlatBuffers vectors sorted by key are binary-searched; MessagePack maps are searched
@@ -424,6 +546,8 @@ int main(int argc, char** argv) {
             return kv.key.via.str.size + integer(at(kv.val, 0));
         },
         [](im::Lookup x) { return x.items().size(); });
+    add_json("lookup", json_read::lookup, json_read::lookup_pick);
+    add_protobuf("lookup", type_identity<pbm::Lookup>{}, pb_read::lookup, pb_read::lookup_pick);
     {
         const std::string w = "lookup";
         const Buffer& in = buffers["lookup.tessera"];
@@ -486,16 +610,40 @@ int main(int argc, char** argv) {
             }
             return static_cast<std::uint64_t>(s);
         };
-        if (tessera_names() != fb_names() || tessera_names() != mp_names() || tessera_ids() != fb_ids() || tessera_ids() != mp_ids()) {
+        // Protobuf's dictionaries are repeated entries here (a map field would parse into a hash map, whose order is
+        // unspecified), so like MessagePack's they are scanned.
+        const auto* pbo = static_cast<const pbm::Lookup*>(pb_tree_of[w]);
+        auto pb_names = [=] {
+            std::uint64_t s = 0;
+            for (const std::string& k : *names) {
+                for (const pbm::ItemEntry& e : pbo->items()) {
+                    if (e.key() == k) { s += static_cast<std::uint64_t>(e.value().count()); break; }
+                }
+            }
+            return s;
+        };
+        auto pb_ids = [=] {
+            double s = 0;
+            for (std::int32_t k : *ids) {
+                for (const pbm::PriceEntry& e : pbo->prices()) {
+                    if (e.key() == k) { s += e.value(); break; }
+                }
+            }
+            return static_cast<std::uint64_t>(s);
+        };
+        if (tessera_names() != fb_names() || tessera_names() != mp_names() || tessera_ids() != fb_ids() || tessera_ids() != mp_ids() ||
+            !pbo || tessera_names() != pb_names() || tessera_ids() != pb_ids()) {
             std::fprintf(stderr, "LOOKUP MISMATCH\n");
             ok = false;
         }
         cases.push_back({w, "Tessera", "1000 lookups by string", tessera_names, {}});
         cases.push_back({w, "FlatBuffers", "1000 lookups by string", fb_names, {}});
         cases.push_back({w, "MessagePack", "1000 lookups by string (parsed tree, linear)", mp_names, {}});
+        cases.push_back({w, "Protobuf", "1000 lookups by string (parsed tree, linear)", pb_names, {}});
         cases.push_back({w, "Tessera", "1000 lookups by int", tessera_ids, {}});
         cases.push_back({w, "FlatBuffers", "1000 lookups by int", fb_ids, {}});
         cases.push_back({w, "MessagePack", "1000 lookups by int (parsed tree, linear)", mp_ids, {}});
+        cases.push_back({w, "Protobuf", "1000 lookups by int (parsed tree, linear)", pb_ids, {}});
     }
 
     // Real data: canada.json, one GeoJSON polygon of 480 rings and 55,563 points. A random read takes a ring's middle
@@ -519,6 +667,8 @@ int main(int argc, char** argv) {
             return ring.via.array.size + std::bit_cast<std::uint64_t>(at(p, 0).via.f64) + std::bit_cast<std::uint64_t>(at(p, 1).via.f64);
         },
         [](im::FeatureCollection x) { return x.features()[0].geometry().coordinates().size(); });
+    add_json("canada", json_read::canada, json_read::canada_pick);
+    add_protobuf("canada", type_identity<pbm::FeatureCollection>{}, pb_read::canada, pb_read::canada_pick);
 
     // Fixed cells: the series again, with its always-set values marked [TesseraKeepDefault] (constant positions, no
     // presence bits), read like the Tessera rows above with the same picks.

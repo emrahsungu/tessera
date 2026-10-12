@@ -1,0 +1,249 @@
+// Protocol Buffers schema for the benchmark workloads. It mirrors benchmarks/Tessera.Benchmarks/Models.cs:
+// - nullable members are `optional` (messages have presence anyway);
+// - nullable lists are wrapped in a message, because a repeated field cannot tell null from empty;
+// - the union is a oneof;
+// - dictionaries are repeated key/value entries, which is what a map is on the wire, kept in the writer's order
+//   (C++'s map type iterates in hash order).
+syntax = "proto3";
+
+package bench.pb;
+
+option csharp_namespace = "Bench.Pb";
+option optimize_for = SPEED;
+
+message Vec2 { float x = 1; float y = 2; }
+message Vec3 { float x = 1; float y = 2; float z = 3; }
+message Vec4 { float x = 1; float y = 2; float z = 3; float w = 4; }
+message ObjectRef { uint32 component_name = 1; int32 index = 2; int32 object_ref_id = 3; }
+
+message Int32List { repeated int32 items = 1; }
+message ObjectRefList { repeated ObjectRef items = 1; }
+
+// ---------------------------------------------------------------- UI prefab
+
+message ImageComponent {
+  optional string sprite = 1;
+  optional string material = 2;
+  Vec4 color = 3;
+  Vec4 uv_rect = 4;
+  int32 fill_method = 5;
+  float fill_amount = 6;
+  bool enable = 7;
+  bool raycast_target = 8;
+  bool preserve_aspect = 9;
+}
+
+message TextComponent {
+  optional string text = 1;
+  optional string font = 2;
+  Vec4 color = 3;
+  float font_size = 4;
+  float line_spacing = 5;
+  int32 alignment = 6;
+  uint32 color_mode = 7;
+  bool enable = 8;
+  bool rich_text = 9;
+}
+
+message ButtonComponent {
+  ObjectRef target = 1;
+  ObjectRef on_click = 2;
+  bool interactable = 3;
+  uint32 transition = 4;
+}
+
+message LayoutComponent {
+  Vec4 padding = 1;
+  float spacing = 2;
+  int32 child_alignment = 3;
+  bool control_width = 4;
+  bool control_height = 5;
+  bool expand_width = 6;
+  bool expand_height = 7;
+}
+
+message ControllerComponent {
+  ObjectRefList sets = 1;
+  ObjectRefList empties = 2;
+  ObjectRefList hides = 3;
+  ObjectRefList images = 4;
+  ObjectRefList icons = 5;
+  ObjectRefList names = 6;
+  ObjectRefList levels = 7;
+  ObjectRefList skills = 8;
+  ObjectRefList texts = 9;
+  ObjectRefList buttons = 10;
+  ObjectRef icon = 11;
+  ObjectRef glow = 12;
+  ObjectRef level = 13;
+  ObjectRef star = 14;
+  ObjectRef skill_list = 15;
+  ObjectRef badge = 16;
+  ObjectRef banner = 17;
+  ObjectRef counter = 18;
+  ObjectRef divider = 19;
+  ObjectRef header = 20;
+  ObjectRef background = 21;
+  ObjectRef group = 22;
+  ObjectRef caption = 23;
+  ObjectRef thumbnail = 24;
+  ObjectRef tooltip = 25;
+  optional bool is_pinned = 26;
+  optional bool show_title = 27;
+  optional bool is_featured = 28;
+  optional bool locked = 29;
+  optional bool enable = 30;
+}
+
+message Component {
+  oneof kind {
+    ImageComponent image = 1;
+    TextComponent text = 2;
+    ButtonComponent button = 3;
+    LayoutComponent layout = 4;
+    ControllerComponent controller = 5;
+  }
+}
+
+message ComponentList { repeated Component items = 1; }
+
+message PrefabObject {
+  optional string name = 1;
+  ComponentList components = 2;
+  Int32List children = 3;
+  Vec4 rotation = 4;
+  Vec3 position = 5;
+  Vec3 scale = 6;
+  Vec2 pivot = 7;
+  Vec2 anchor_min = 8;
+  Vec2 anchor_max = 9;
+  Vec2 size_delta = 10;
+  int32 id = 11;
+  bool active = 12;
+}
+
+message Prefab { repeated PrefabObject objects = 1; }
+
+// ---------------------------------------------------------------- game monsters
+
+enum Color { RED = 0; GREEN = 1; BLUE = 2; }
+
+message Weapon {
+  optional string name = 1;
+  int32 damage = 2;
+}
+
+message WeaponList { repeated Weapon items = 1; }
+message Vec3List { repeated Vec3 items = 1; }
+
+message Monster {
+  optional string name = 1;
+  int32 hp = 2;
+  optional int32 mana = 3;
+  Vec3 pos = 4;
+  Color color = 5;
+  optional bytes inventory = 6;
+  WeaponList weapons = 7;
+  Weapon equipped = 8;
+  Vec3List path = 9;
+  bool friendly = 10;
+}
+
+message World { repeated Monster monsters = 1; }
+
+// ---------------------------------------------------------------- sparse records (40 optional fields)
+
+message Record {
+  optional int32 i0 = 1; optional int32 i1 = 2; optional int32 i2 = 3; optional int32 i3 = 4;
+  optional int32 i4 = 5; optional int32 i5 = 6; optional int32 i6 = 7; optional int32 i7 = 8;
+  optional int32 i8 = 9; optional int32 i9 = 10; optional int32 i10 = 11; optional int32 i11 = 12;
+  optional int32 i12 = 13; optional int32 i13 = 14; optional int32 i14 = 15; optional int32 i15 = 16;
+  optional float f0 = 17; optional float f1 = 18; optional float f2 = 19; optional float f3 = 20;
+  optional float f4 = 21; optional float f5 = 22; optional float f6 = 23; optional float f7 = 24;
+  optional double d0 = 25; optional double d1 = 26; optional double d2 = 27; optional double d3 = 28;
+  optional bool b0 = 29; optional bool b1 = 30; optional bool b2 = 31; optional bool b3 = 32;
+  optional bool b4 = 33; optional bool b5 = 34; optional bool b6 = 35; optional bool b7 = 36;
+  optional string s0 = 37; optional string s1 = 38; optional string s2 = 39; optional string s3 = 40;
+}
+
+message RecordSet { repeated Record records = 1; }
+
+// ---------------------------------------------------------------- dense time series
+
+message Sample {
+  int64 timestamp = 1;
+  double value = 2;
+  int32 status = 3;
+  float quality = 4;
+  optional string note = 5;
+}
+
+message Series { repeated Sample samples = 1; }
+
+// ---------------------------------------------------------------- scene graphs
+
+message Node {
+  int32 id = 1;
+  optional string name = 2;
+  optional bool active = 3;
+  // Always written (explicit presence): Google.Protobuf's C# writer leaves out a float that compares equal to 0, which
+  // -0.0 does (node 0 has y = -0.0).
+  optional float x = 4;
+  optional float y = 5;
+  optional float z = 6;
+  optional int32 parent = 7;
+  Int32List children = 8;
+}
+
+message Scene {
+  repeated Node nodes = 1;
+  optional string name = 2;
+}
+
+// ---------------------------------------------------------------- dictionaries
+
+message Stock {
+  int32 count = 1;
+  float weight = 2;
+}
+
+message ItemEntry {
+  string key = 1;
+  Stock value = 2;
+}
+
+message PriceEntry {
+  int32 key = 1;
+  double value = 2;
+}
+
+message Lookup {
+  repeated ItemEntry items = 1;
+  repeated PriceEntry prices = 2;
+}
+
+// ---------------------------------------------------------------- GeoJSON (canada.json)
+
+message Point { double x = 1; double y = 2; }
+message Ring { repeated Point points = 1; }
+
+message Geometry {
+  optional string type = 1;
+  repeated Ring coordinates = 2;
+}
+
+message PropertyEntry {
+  string key = 1;
+  string value = 2;
+}
+
+message Feature {
+  optional string type = 1;
+  repeated PropertyEntry properties = 2;
+  Geometry geometry = 3;
+}
+
+message FeatureCollection {
+  optional string type = 1;
+  repeated Feature features = 2;
+}

@@ -1,5 +1,5 @@
 # A/B benchmark: a candidate (B) against a baseline (A), on the same machine, in alternating order (AB, BA, AB, BA)
-# so drift affects both alike. FlatBuffers and MessagePack run unchanged on both sides, so their deltas show the noise.
+# so drift affects both alike. The other libraries run unchanged on both sides, so their deltas show the noise.
 # Both sides are built in their own git worktrees (in the temp folder), so the working tree can keep changing meanwhile.
 #   scripts/ab.ps1 -Candidate HEAD                    B = the last commit, A = its parent
 #   scripts/ab.ps1 -Baseline <ref> -Candidate <ref>   any two commits (the same ref twice measures the noise)
@@ -100,14 +100,27 @@ if (-not $ReportOnly) {
 
     $sides = @(@{ Name = 'A'; Root = $base }, @{ Name = 'B'; Root = $cand })
     $flatc = Join-Path $root '.deps/flatc/flatc.exe'
+    $protoc = Join-Path $root '.deps/protoc/bin/protoc.exe'
     $wsl = [bool](Get-Command wsl -ErrorAction SilentlyContinue)
     function WslPath([string]$p) { (wsl wslpath -a ($p -replace '\\', '/')).Trim() }
+    if (-not $NoNative -and $wsl -and $Compilers -contains 'gcc') {
+        Run 'libprotobuf (GCC, WSL)' { wsl bash -c "bash '$(WslPath (Join-Path $PSScriptRoot 'protobuf-linux.sh'))' '$(WslPath (Join-Path $root '.deps'))'" }
+    }
 
     foreach ($s in $sides) {
         $r = $s.Root
         Run "$($s.Name): flatc" {
             & $flatc --cpp --scoped-enums -o (Join-Path $r 'benchmarks/generated/fb-cpp') (Join-Path $r 'benchmarks/schemas/bench.fbs')
             & $flatc --csharp -o (Join-Path $r 'benchmarks/generated/fb-csharp') (Join-Path $r 'benchmarks/schemas/bench.fbs')
+        }
+        # Commits from before the Protocol Buffers workloads have no .proto schema.
+        $proto = Join-Path $r 'benchmarks/schemas/bench.proto'
+        if (Test-Path $proto) {
+            Run "$($s.Name): protoc" {
+                $pbCpp = Join-Path $r 'benchmarks/generated/pb-cpp'; $pbCs = Join-Path $r 'benchmarks/generated/pb-csharp'
+                New-Item -ItemType Directory -Force $pbCpp, $pbCs | Out-Null
+                & $protoc "--cpp_out=$pbCpp" "--csharp_out=$pbCs" -I (Join-Path $r 'benchmarks/schemas') $proto
+            }
         }
         $proj = Join-Path $r 'benchmarks/Tessera.Benchmarks/Tessera.Benchmarks.csproj'
         Run "$($s.Name): .NET build" { dotnet build $proj -c Release --nologo -v q | Out-Null }
@@ -181,7 +194,7 @@ if ($meta -and $meta.jcc) {
     [void]$md.AppendLine('Built with the JCC-erratum mitigation (`-Jcc`: GCC and clang-cl `-mbranches-within-32B-boundaries`, MSVC `/QIntel-jcc-erratum`), so code placement does not change which jumps miss the uop cache.')
     [void]$md.AppendLine()
 }
-[void]$md.AppendLine("$runs alternations (AB, BA, ...) $Times $(if ($meta) { $meta.rounds } else { $Rounds }) rounds; medians of all samples per side. Negative = B faster/smaller. A row is marked * when it changed by more than the noise threshold (the larger of 3% and twice the median |$($Delta)| of the FlatBuffers and MessagePack rows, which are identical code on both sides), and in every alternation by at least half the threshold in the same direction. The geometric means cover all Tessera rows; the control's is the drift between the sides.")
+[void]$md.AppendLine("$runs alternations (AB, BA, ...) $Times $(if ($meta) { $meta.rounds } else { $Rounds }) rounds; medians of all samples per side. Negative = B faster/smaller. A row is marked * when it changed by more than the noise threshold (the larger of 3% and twice the median |$($Delta)| of the other libraries' rows, which are identical code on both sides), and in every alternation by at least half the threshold in the same direction. The geometric means cover all Tessera rows; the control's is the drift between the sides.")
 [void]$md.AppendLine()
 
 # key -> @{ All = every sample; Runs = alternation -> median of that run's samples }
@@ -238,12 +251,12 @@ foreach ($c in $Compilers) {
     $fa = @(Get-ChildItem $results -Filter "native-$c-A-*.json"); $fb = @(Get-ChildItem $results -Filter "native-$c-B-*.json")
     if (-not $fa.Count -or -not $fb.Count) { continue }
     $rows = { param($j) $j.read }; $key = { param($r) "$($r.workload) / $($r.library) / $($r.operation)" }; $samples = { param($r) $r.samples_us }
-    Report "C++ read, $c ($($Micro)s)" (Collect $fa $rows $key $samples) (Collect $fb $rows $key $samples) { param($k) $k -match ' / (FlatBuffers|MessagePack) / ' }
+    Report "C++ read, $c ($($Micro)s)" (Collect $fa $rows $key $samples) (Collect $fb $rows $key $samples) { param($k) $k -match ' / (FlatBuffers|MessagePack|Protobuf|JSON) / ' }
 }
 $da = @(Get-ChildItem $results -Filter 'dotnet-A-*.json'); $db = @(Get-ChildItem $results -Filter 'dotnet-B-*.json')
 if ($da.Count -and $db.Count) {
     $rows = { param($j) $j.write }; $key = { param($r) "$($r.workload) / $($r.library) / $($r.variant)" }; $samples = { param($r) $r.samples_us }
-    Report ".NET write ($($Micro)s)" (Collect $da $rows $key $samples) (Collect $db $rows $key $samples) { param($k) $k -match ' / (FlatBuffers|MessagePack)' }
+    Report ".NET write ($($Micro)s)" (Collect $da $rows $key $samples) (Collect $db $rows $key $samples) { param($k) $k -match ' / (FlatBuffers|MessagePack|MemoryPack|Protobuf|System\.Text\.Json|Newtonsoft\.Json)' }
 }
 
 # Sizes are exact: the exported buffers' lengths, recorded when each side was built.

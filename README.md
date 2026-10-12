@@ -267,7 +267,8 @@ FlatBuffers' and MessagePack's code does not change ([benchmarks/native/readers.
 
 The full list, computed from the results, is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
-Reproduce everything (it also fetches FlatBuffers, msgpack-cxx and canada.json, SHA-256 pinned, into `.deps/`):
+Reproduce everything (it fetches the other libraries and canada.json, SHA-256 pinned, into `.deps/`, and builds
+libprotobuf from source once per compiler):
 
 ```shell
 powershell scripts/bench.ps1
@@ -571,7 +572,7 @@ MSBuild properties: `TesseraCppOutputDir`; `TesseraCppHeaderName` (default `<Ass
 - C++: a C++20 compiler and CMake 3.20 or later. Tested with MSVC 19.42, clang-cl 19, GCC 15 and Clang 21.
 - Building this repository: the .NET 10 SDK, CMake, and Visual Studio 2022 or later with "Desktop development with
   C++" (add "C++ Clang tools for Windows" for clang-cl; Visual Studio 2026 needs CMake 4.2 or later); WSL with GCC and
-  Clang for the Linux tests and the GCC benchmark.
+  Clang for the Linux tests, and with GCC, CMake, Ninja and Python 3 for the GCC benchmark.
 
 ## How to build
 
@@ -609,8 +610,8 @@ powershell scripts/ab.ps1 -Baseline <commit> -Candidate <commit>
 powershell scripts/ab.ps1 -Candidate HEAD -Jcc   # with the JCC-erratum mitigation, to rule out code placement
 ```
 
-Both commits are built in their own worktrees and run in alternating order; FlatBuffers and MessagePack run on both
-sides as the noise control.
+Both commits are built in their own worktrees and run in alternating order; the other libraries run on both sides as
+the noise control.
 
 ## Repository layout
 
@@ -621,7 +622,7 @@ sides as the noise control.
 | `src/Tessera.Cpp` | build step that writes the generated headers to disk |
 | `cpp/include/tessera` | C++20 header-only runtime: views, verifier, schema translation, JSON dump |
 | `tests` | .NET tests, generator tests, C++ interop, fuzz and UTF-8 tests |
-| `benchmarks` | the Tessera / FlatBuffers / MessagePack benchmark (C# writers, C++ readers) |
+| `benchmarks` | the benchmark against FlatBuffers, MessagePack, Protocol Buffers, JSON and MemoryPack (C# writers, C++ readers) |
 | `samples/Quickstart` | the example at the top of this page, end to end |
 | `docs` | the [documentation](docs/README.md): guide, attributes, diagnostics, [wire format](docs/FORMAT.md); [benchmark results](docs/BENCHMARKS.md) and their raw data, the README's charts |
 
@@ -635,6 +636,12 @@ is distributed under its own license.
 | [FlatBuffers](https://github.com/google/flatbuffers) 25.12.19 | benchmarks: `flatc`, C++ headers, the C# runtime (built from source) | Apache-2.0 |
 | [msgpack-c](https://github.com/msgpack/msgpack-c) (C++) 9.0.0 | benchmarks: the C++ MessagePack reader | BSL-1.0 |
 | [MessagePack-CSharp](https://github.com/MessagePack-CSharp/MessagePack-CSharp) 3.1.10 | benchmarks: the .NET MessagePack writer | MIT |
+| [Protocol Buffers](https://github.com/protocolbuffers/protobuf) 36.2 | benchmarks: `protoc`, the C++ reader (libprotobuf, built from source) and the .NET writer (Google.Protobuf 3.36.2) | BSD-3-Clause |
+| [Abseil](https://github.com/abseil/abseil-cpp) 20250512.1 | benchmarks: required by libprotobuf (built from source) | Apache-2.0 |
+| [simdjson](https://github.com/simdjson/simdjson) 5.0.3 | benchmarks: the C++ JSON reader | Apache-2.0 or MIT |
+| [Newtonsoft.Json](https://github.com/JamesNK/Newtonsoft.Json) 13.0.4 | benchmarks: a .NET JSON writer (System.Text.Json, part of .NET, is the other) | MIT |
+| [MemoryPack](https://github.com/Cysharp/MemoryPack) 1.21.4 | benchmarks: a .NET writer (it has no C++ reader) | MIT |
+| [BenchmarkDotNet](https://github.com/dotnet/BenchmarkDotNet) 0.15.8 | benchmarks: timing the .NET writes | MIT |
 | [nativejson-benchmark](https://github.com/miloyip/nativejson-benchmark) | benchmarks: `canada.json`, the canada workload's data (fetched, not included) | MIT |
 | [xUnit.net](https://github.com/xunit/xunit) v3 | tests | Apache-2.0 |
 | [Roslyn](https://github.com/dotnet/roslyn) (Microsoft.CodeAnalysis.CSharp 4.8) | building the source generator (not shipped) | MIT |

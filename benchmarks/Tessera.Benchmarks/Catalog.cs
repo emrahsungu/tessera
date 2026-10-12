@@ -6,6 +6,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using Bench.Models;
+using Google.Protobuf;
 using MessagePack;
 using Tessera;
 
@@ -104,6 +105,10 @@ public static class Catalog
             ("Tessera (no sharing)", "to byte[]"), ("Tessera (full sharing)", "to byte[]"),
             ("FlatBuffers", "to byte[]"), ("FlatBuffers", "reused builder, no copy"), ("FlatBuffers (shared strings)", "to byte[]"),
             ("MessagePack", "to byte[]"), ("MessagePack", "reused buffer, no copy"),
+            ("System.Text.Json", "to byte[]"), ("System.Text.Json", "reused buffer, no copy"),
+            ("Newtonsoft.Json", "to byte[]"), ("Newtonsoft.Json", "reused buffer, no copy"),
+            ("MemoryPack", "to byte[]"), ("MemoryPack", "reused buffer, no copy"),
+            ("Protobuf", "to byte[]"), ("Protobuf", "reused buffer, no copy"), ("Protobuf (prebuilt messages)", "to byte[]"),
         };
 
         public Func<int> CreateOp(string library, string variant)
@@ -161,6 +166,66 @@ public static class Catalog
                         return output.WrittenCount;
                     };
                 }
+                case ("System.Text.Json", "to byte[]"):
+                {
+                    var info = JsonFormats.Stj<T>();
+                    return () => System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(data, info).Length;
+                }
+                case ("System.Text.Json", "reused buffer, no copy"):
+                {
+                    var info = JsonFormats.Stj<T>();
+                    var output = new ArrayBufferWriter<byte>(1 << 20);
+                    var json = new System.Text.Json.Utf8JsonWriter(output);
+                    return () =>
+                    {
+                        output.ResetWrittenCount();
+                        json.Reset(output);
+                        System.Text.Json.JsonSerializer.Serialize(json, data, info);
+                        json.Flush();
+                        return output.WrittenCount;
+                    };
+                }
+                case ("Newtonsoft.Json", "to byte[]"):
+                {
+                    var writer = new JsonFormats.NewtonsoftWriter();
+                    return () => writer.Write(data).ToArray().Length;
+                }
+                case ("Newtonsoft.Json", "reused buffer, no copy"):
+                {
+                    var writer = new JsonFormats.NewtonsoftWriter();
+                    return () => (int)writer.Write(data).Length;
+                }
+                case ("MemoryPack", "to byte[]"):
+                    return () => MemoryPack.MemoryPackSerializer.Serialize(data).Length;
+                case ("MemoryPack", "reused buffer, no copy"):
+                {
+                    var output = new ArrayBufferWriter<byte>(1 << 20);
+                    return () =>
+                    {
+                        output.ResetWrittenCount();
+                        MemoryPack.MemoryPackSerializer.Serialize(output, data);
+                        return output.WrittenCount;
+                    };
+                }
+                // Protobuf writes its own message classes: the objects are converted on every write (as FlatBuffers
+                // builds from them), except with prebuilt messages, as when a program keeps its data in them.
+                case ("Protobuf", "to byte[]"):
+                    return () => ProtobufFormats.Convert(data).ToByteArray().Length;
+                case ("Protobuf", "reused buffer, no copy"):
+                {
+                    var output = new ArrayBufferWriter<byte>(1 << 20);
+                    return () =>
+                    {
+                        output.ResetWrittenCount();
+                        ProtobufFormats.Convert(data).WriteTo(output);
+                        return output.WrittenCount;
+                    };
+                }
+                case ("Protobuf (prebuilt messages)", "to byte[]"):
+                {
+                    IMessage message = ProtobufFormats.Convert(data);
+                    return () => message.ToByteArray().Length;
+                }
                 default:
                     throw new ArgumentException($"unknown case {name}/{library}/{variant}");
             }
@@ -184,6 +249,11 @@ public static class Catalog
                 ("fb", "FlatBuffers", fbBytes),
                 ("fb-shared", "FlatBuffers (shared strings)", fbSharedBytes),
                 ("msgpack", "MessagePack", MessagePackSerializer.Serialize(data)),
+                ("json", "JSON", System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(data, JsonFormats.Stj<T>())),
+                ("json-newtonsoft", "JSON (Newtonsoft.Json)", new JsonFormats.NewtonsoftWriter().Write(data).ToArray()),
+                // MemoryPack has no C++ reader, so its buffer only counts for size.
+                ("memorypack", "MemoryPack", MemoryPack.MemoryPackSerializer.Serialize(data)),
+                ("protobuf", "Protobuf", ProtobufFormats.Convert(data).ToByteArray()),
             };
             foreach (var (key, label, bytes) in buffers)
             {

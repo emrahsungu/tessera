@@ -151,6 +151,10 @@ Dictionary<string, object> HostInfo() => new()
     ["tessera"] = typeof(TesseraWriter).Assembly.GetName().Version?.ToString() ?? "",
     ["messagepack"] = Version(typeof(MessagePackSerializer)),
     ["flatbuffers"] = "25.12.19 (C# runtime built from the release source)",
+    ["memorypack"] = Version(typeof(MemoryPack.MemoryPackSerializer)),
+    ["protobuf"] = Version(typeof(Google.Protobuf.IMessage)),
+    ["system_text_json"] = Version(typeof(JsonSerializer)),
+    ["newtonsoft_json"] = Version(typeof(Newtonsoft.Json.JsonConvert)),
     ["benchmark_tool"] = "BenchmarkDotNet " + Version(typeof(BenchmarkRunner)),
     ["timestamp_utc"] = DateTime.UtcNow.ToString("u"),
 };

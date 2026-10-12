@@ -1,4 +1,4 @@
-# Builds and runs the whole three-library benchmark and writes docs/BENCHMARKS.md and the README's charts (docs/images/benchmarks).
+# Builds and runs the whole benchmark and writes docs/BENCHMARKS.md and the README's charts (docs/images/benchmarks).
 #   scripts/bench.ps1             full run (several minutes)
 #   scripts/bench.ps1 -Quick      fewer, shorter rounds (for a smoke test)
 #   scripts/bench.ps1 -NoGcc      skip the GCC run in WSL
@@ -29,6 +29,12 @@ Run 'flatc' {
     & $flatc --cpp --scoped-enums -o (Join-Path $bench 'generated/fb-cpp') (Join-Path $bench 'schemas/bench.fbs')
     & $flatc --csharp -o (Join-Path $bench 'generated/fb-csharp') (Join-Path $bench 'schemas/bench.fbs')
 }
+Run 'protoc' {
+    $protoc = Join-Path $root '.deps/protoc/bin/protoc.exe'
+    $pbCpp = Join-Path $bench 'generated/pb-cpp'; $pbCs = Join-Path $bench 'generated/pb-csharp'
+    New-Item -ItemType Directory -Force $pbCpp, $pbCs | Out-Null
+    & $protoc "--cpp_out=$pbCpp" "--csharp_out=$pbCs" -I (Join-Path $bench 'schemas') (Join-Path $bench 'schemas/bench.proto')
+}
 $proj = Join-Path $bench 'Tessera.Benchmarks/Tessera.Benchmarks.csproj'
 Run '.NET build' { dotnet build $proj -c Release --nologo -v q }
 Run 'export buffers' { dotnet run --project $proj -c Release --no-build -- --export-only }
@@ -45,7 +51,7 @@ if (-not $NoClang) {
 if (-not $NoGcc -and (Get-Command wsl -ErrorAction SilentlyContinue)) {
     $wslRoot = (wsl wslpath -a ($root -replace '\\', '/')).Trim()
     Run 'C++ build + read benchmark (GCC, WSL)' {
-        wsl bash -c "cmake -S '$wslRoot/benchmarks/native' -B /tmp/tessera-bench-gcc -G Ninja -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release >/dev/null && cmake --build /tmp/tessera-bench-gcc >/dev/null && /tmp/tessera-bench-gcc/tessera_bench '$wslRoot/benchmarks/generated/data' --rounds $rounds --round-ms $roundMs --json '$wslRoot/benchmarks/results/native-gcc.json'"
+        wsl bash -c "bash '$wslRoot/scripts/protobuf-linux.sh' '$wslRoot/.deps' && cmake -S '$wslRoot/benchmarks/native' -B /tmp/tessera-bench-gcc -G Ninja -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release >/dev/null && cmake --build /tmp/tessera-bench-gcc >/dev/null && /tmp/tessera-bench-gcc/tessera_bench '$wslRoot/benchmarks/generated/data' --rounds $rounds --round-ms $roundMs --json '$wslRoot/benchmarks/results/native-gcc.json'"
     }
 }
 

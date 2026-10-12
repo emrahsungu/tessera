@@ -1,8 +1,11 @@
-// Benchmark models. The same classes are written by Tessera and MessagePack ([MessagePackObject]). Program.cs writes
-// them through generic code, which hides the types from the generator, so they are marked [Tessera].
-// FlatBuffers is written from them with its builder API (FbWriters.cs, schema in benchmarks/schemas/bench.fbs).
+// Benchmark models. The same classes are written by Tessera, MessagePack ([MessagePackObject]), MemoryPack
+// ([MemoryPackable], so the classes are partial) and both JSON libraries (JsonFormats.cs). The benchmark writes them
+// through generic code, which hides the types from Tessera's generator, so they are marked [Tessera]. FlatBuffers is
+// written from them with its builder API (FbWriters.cs, schema in benchmarks/schemas/bench.fbs).
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 using Tessera;
+using MemoryPack;
 using MessagePack;
 
 namespace Bench.Models;
@@ -69,12 +72,25 @@ public struct ObjectRef
 [Union(2, typeof(ButtonComponent))]
 [Union(3, typeof(LayoutComponent))]
 [Union(4, typeof(ControllerComponent))]
-public abstract class Component
+// JSON: a "$type" member first (Newtonsoft.Json writes the same names through JsonFormats.UnionBinder).
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+[JsonDerivedType(typeof(ImageComponent), "Image")]
+[JsonDerivedType(typeof(TextComponent), "Text")]
+[JsonDerivedType(typeof(ButtonComponent), "Button")]
+[JsonDerivedType(typeof(LayoutComponent), "Layout")]
+[JsonDerivedType(typeof(ControllerComponent), "Controller")]
+[MemoryPackable]
+[MemoryPackUnion(0, typeof(ImageComponent))]
+[MemoryPackUnion(1, typeof(TextComponent))]
+[MemoryPackUnion(2, typeof(ButtonComponent))]
+[MemoryPackUnion(3, typeof(LayoutComponent))]
+[MemoryPackUnion(4, typeof(ControllerComponent))]
+public abstract partial class Component
 {
 }
 
-[Tessera, MessagePackObject]
-public sealed class ImageComponent : Component
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class ImageComponent : Component
 {
     [Key(0)] public string? Sprite;
     [Key(1)] public string? Material;
@@ -87,8 +103,8 @@ public sealed class ImageComponent : Component
     [Key(8)] public bool PreserveAspect;
 }
 
-[Tessera, MessagePackObject]
-public sealed class TextComponent : Component
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class TextComponent : Component
 {
     [Key(0)] public string? Text;
     [Key(1)] public string? Font;
@@ -101,8 +117,8 @@ public sealed class TextComponent : Component
     [Key(8)] public bool RichText;
 }
 
-[Tessera, MessagePackObject]
-public sealed class ButtonComponent : Component
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class ButtonComponent : Component
 {
     [Key(0)] public ObjectRef Target;
     [Key(1)] public ObjectRef OnClick;
@@ -110,8 +126,8 @@ public sealed class ButtonComponent : Component
     [Key(3)] public byte Transition;
 }
 
-[Tessera, MessagePackObject]
-public sealed class LayoutComponent : Component
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class LayoutComponent : Component
 {
     [Key(0)] public Vec4 Padding;
     [Key(1)] public float Spacing;
@@ -123,8 +139,8 @@ public sealed class LayoutComponent : Component
 }
 
 /// <summary>Wide and sparse: 30 members, most of them absent.</summary>
-[Tessera, MessagePackObject]
-public sealed class ControllerComponent : Component
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class ControllerComponent : Component
 {
     [Key(0)] public List<ObjectRef>? Sets;
     [Key(1)] public List<ObjectRef>? Empties;
@@ -158,8 +174,8 @@ public sealed class ControllerComponent : Component
     [Key(29)] public bool? Enable;
 }
 
-[Tessera, MessagePackObject]
-public sealed class PrefabObject
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class PrefabObject
 {
     [Key(0)] public string? Name;
     [Key(1)] public List<Component>? Components;
@@ -175,8 +191,8 @@ public sealed class PrefabObject
     [Key(11)] public bool Active;
 }
 
-[Tessera, MessagePackObject]
-public sealed class Prefab
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class Prefab
 {
     [Key(0)] public List<PrefabObject>? Objects;
 }
@@ -185,15 +201,15 @@ public sealed class Prefab
 
 public enum Color : byte { Red, Green, Blue }
 
-[Tessera, MessagePackObject]
-public sealed class Weapon
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class Weapon
 {
     [Key(0)] public string? Name;
     [Key(1)] public short Damage;
 }
 
-[Tessera, MessagePackObject]
-public sealed class Monster
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class Monster
 {
     [Key(0)] public string? Name;
     [Key(1)] public short Hp = 100;
@@ -207,16 +223,16 @@ public sealed class Monster
     [Key(9)] public bool Friendly;
 }
 
-[Tessera, MessagePackObject]
-public sealed class World
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class World
 {
     [Key(0)] public List<Monster>? Monsters;
 }
 
 // ---------------------------------------------------------------- sparse records
 
-[Tessera, MessagePackObject]
-public sealed class Record
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class Record
 {
     [Key(0)] public int? I0;
     [Key(1)] public int? I1;
@@ -260,16 +276,16 @@ public sealed class Record
     [Key(39)] public string? S3;
 }
 
-[Tessera, MessagePackObject]
-public sealed class RecordSet
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class RecordSet
 {
     [Key(0)] public List<Record>? Records;
 }
 
 // ---------------------------------------------------------------- dense time series
 
-[Tessera, MessagePackObject]
-public sealed class Sample
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class Sample
 {
     [Key(0)] public long Timestamp;
     [Key(1)] public double Value;
@@ -278,8 +294,8 @@ public sealed class Sample
     [Key(4)] public string? Note;
 }
 
-[Tessera, MessagePackObject]
-public sealed class Series
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class Series
 {
     [Key(0)] public List<Sample>? Samples;
 }
@@ -287,7 +303,7 @@ public sealed class Series
 // The same samples with the values that are (almost) always set as fixed cells: a constant position each, no presence
 // bits. Status is 0 (its default, so not stored) in 90% of samples, so it stays an ordinary cell.
 [Tessera]
-public sealed class FixedSample
+public sealed partial class FixedSample
 {
     [TesseraKeepDefault] public long Timestamp;
     [TesseraKeepDefault] public double Value;
@@ -297,7 +313,7 @@ public sealed class FixedSample
 }
 
 [Tessera]
-public sealed class FixedSeries
+public sealed partial class FixedSeries
 {
     public List<FixedSample>? Samples;
 
@@ -309,8 +325,8 @@ public sealed class FixedSeries
 
 // ---------------------------------------------------------------- scene graphs
 
-[Tessera, MessagePackObject]
-public sealed class Node
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class Node
 {
     [Key(0)] public int Id;
     [Key(1)] public string? Name;
@@ -322,8 +338,8 @@ public sealed class Node
     [Key(7)] public int[]? Children;
 }
 
-[Tessera, MessagePackObject]
-public sealed class Scene
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class Scene
 {
     [Key(0)] public Node[]? Nodes;
     [Key(1)] public string? Name;
@@ -331,15 +347,15 @@ public sealed class Scene
 
 // ---------------------------------------------------------------- dictionaries (keyed lookups)
 
-[Tessera, MessagePackObject]
-public sealed class Stock
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class Stock
 {
     [Key(0)] public int Count;
     [Key(1)] public float Weight;
 }
 
-[Tessera, MessagePackObject]
-public sealed class Lookup
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class Lookup
 {
     [Key(0)] public Dictionary<string, Stock>? Items;
     [Key(1)] public Dictionary<int, double>? Prices;
@@ -361,23 +377,23 @@ public struct Point
     }
 }
 
-[Tessera, MessagePackObject]
-public sealed class Geometry
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class Geometry
 {
     [Key(0)] public string? Type;
     [Key(1)] public List<List<Point>>? Coordinates;  // a polygon: rings of points
 }
 
-[Tessera, MessagePackObject]
-public sealed class Feature
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class Feature
 {
     [Key(0)] public string? Type;
     [Key(1)] public Dictionary<string, string>? Properties;
     [Key(2)] public Geometry? Geometry;
 }
 
-[Tessera, MessagePackObject]
-public sealed class FeatureCollection
+[Tessera, MessagePackObject, MemoryPackable]
+public sealed partial class FeatureCollection
 {
     [Key(0)] public string? Type;
     [Key(1)] public List<Feature>? Features;
