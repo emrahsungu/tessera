@@ -25,6 +25,13 @@ function Run([string]$what, [scriptblock]$block) {
 Run '.NET build' { dotnet build (Join-Path $root 'Tessera.slnx') -c Release --nologo -v q }
 Run '.NET runtime tests (exports tests/cpp/generated)' { dotnet run --project (Join-Path $root 'tests/Tessera.Tests') -c Release --no-build }
 Run '.NET generator tests' { dotnet run --project (Join-Path $root 'tests/Tessera.Generator.Tests') -c Release --no-build }
+# A project that references src/Tessera without the generator: the build must warn, and Serialize must explain the fix.
+$noGenerator = Join-Path $root 'tests/Tessera.NoGenerator'
+Run 'no generator: build warns (TESSERA015)' {
+    $out = dotnet build $noGenerator -c Release --nologo -v q 2>&1 | Out-String
+    if ($out -notmatch 'warning TESSERA015') { Write-Host $out; $global:LASTEXITCODE = 1 }
+}
+Run 'no generator: Serialize explains the fix' { dotnet run --project $noGenerator -c Release --no-build }
 
 $configs = @(@{ Name = 'MSVC'; Dir = 'build/msvc'; Args = @() })
 if ($Asan) { $configs += @{ Name = 'MSVC + AddressSanitizer'; Dir = 'build/msvc-asan'; Args = @('-DTESSERA_ASAN=ON') } }

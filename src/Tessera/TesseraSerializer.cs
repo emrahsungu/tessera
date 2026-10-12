@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Threading;
 
 namespace Tessera;
 
@@ -20,6 +21,7 @@ public static class TesseraModel<T>
     {
         Write = write;
         Type = type;
+        TesseraSerializer.CountRegistration();
     }
 }
 
@@ -52,14 +54,27 @@ public static class TesseraSerializer
     public static ReadOnlySpan<byte> Write<T>(TesseraWriter writer, T value)
     {
         if (value is null) throw new ArgumentNullException(nameof(value));
-        TesseraWriteFunc<T> write = TesseraModel<T>.Write
-            ?? throw new TesseraException($"No writer was generated for {typeof(T)}. The source generator (Tessera.Generator) makes a type a model when " +
-                "it has [Tessera], is listed in [assembly: TesseraRoot(typeof(...))], or is serialized with a concrete type somewhere in its project; " +
-                "calls through generic code (Serialize<T> with a type parameter) are not visible to it.");
+        TesseraWriteFunc<T> write = TesseraModel<T>.Write ?? throw NoWriter(typeof(T));
         writer.Reset();
         int root = write(writer, value);
         return writer.Finish(root, TesseraModel<T>.Type!);
     }
+
+    /// <summary>Writers registered by generated code so far, from every loaded assembly.</summary>
+    private static int s_registered;
+
+    internal static void CountRegistration() => Interlocked.Increment(ref s_registered);
+
+    private const string AddGenerator = "reference the Tessera package; inside the Tessera repository, import src/Tessera.ProjectReference.targets " +
+        "instead of referencing src/Tessera. The generator runs only as an analyzer, which a project reference does not pass on, so such a " +
+        "project gets the runtime alone.";
+
+    private static TesseraException NoWriter(Type type) => new(Volatile.Read(ref s_registered) == 0
+        ? $"No writer was generated for {type}, and no Tessera writers are loaded at all: the source generator (Tessera.Generator) did not run. " +
+          "To run it, " + AddGenerator
+        : $"No writer was generated for {type}. The source generator (Tessera.Generator) makes a type a model when it has [Tessera], is listed " +
+          "in [assembly: TesseraRoot(typeof(...))], or is serialized with a concrete type somewhere in its project; calls through generic code " +
+          "(Serialize<T> with a type parameter) are not visible to it. If the project that serializes it does not run the generator, " + AddGenerator);
 
     private static TesseraWriter Rent(TesseraOptions? options)
     {

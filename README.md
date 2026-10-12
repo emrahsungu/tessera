@@ -569,6 +569,11 @@ MSBuild properties: `TesseraCppOutputDir`; `TesseraCppHeaderName` (default `<Ass
 dotnet build Tessera.slnx -c Release
 ```
 
+To use Tessera from this repository's source in a project of your own, import `src/Tessera.ProjectReference.targets`
+at the end of its project file, as `samples/Quickstart` does, instead of referencing `src/Tessera`. The source
+generator runs only as an analyzer, which a project reference does not pass on, so that project would get the runtime
+alone and `Serialize` would throw; inside the repository, the build warns about it (TESSERA015).
+
 ### 2. Run tests
 
 ```shell
