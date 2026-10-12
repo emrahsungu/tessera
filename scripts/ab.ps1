@@ -4,6 +4,8 @@
 #   scripts/ab.ps1 -Candidate HEAD                    B = the last commit, A = its parent
 #   scripts/ab.ps1 -Baseline <ref> -Candidate <ref>   any two commits (the same ref twice measures the noise)
 #   scripts/ab.ps1 -Compilers msvc                    fewer compilers; -NoNative / -NoDotnet to skip a side
+#   scripts/ab.ps1 -AllLibraries                      time every .NET library, not just Tessera and the two that
+#                                                     measure the noise (MemoryPack, MessagePack): 2.2 times longer
 #   scripts/ab.ps1 -Out docs/x.md                     also write the report to a file
 #   scripts/ab.ps1 -ReportOnly [-Results <dir>]       only report on earlier results (default .ab/results)
 #   scripts/ab.ps1 -Jcc                               build with the JCC-erratum mitigation (own build folders), so
@@ -17,6 +19,7 @@ param(
     [int]$RoundMs = 40,
     [switch]$NoNative,
     [switch]$NoDotnet,
+    [switch]$AllLibraries,
     [string]$Filter = '',
     [string]$Out = '',
     [switch]$ReportOnly,
@@ -170,9 +173,12 @@ if (-not $ReportOnly) {
             }
             if (-not $NoDotnet) {
                 $proj = Join-Path $r 'benchmarks/Tessera.Benchmarks/Tessera.Benchmarks.csproj'
+                # Tessera, and two libraries as the noise control (a side whose benchmark predates --libraries times
+                # every library; the report compares the cases both sides ran).
+                $libArgs = if (-not $AllLibraries -and (Select-String -LiteralPath (Join-Path $r 'benchmarks/Tessera.Benchmarks/Program.cs') -SimpleMatch '--libraries' -Quiet)) { @('--libraries', 'Tessera,MemoryPack,MessagePack') } else { @() }
                 Run "$($s.Name) run $i (.NET write)" {
                     Push-Location $r
-                    try { dotnet run --project $proj -c Release --no-build -- --rounds $Rounds --round-ms ([Math]::Max(60, $RoundMs)) --warmup-ms 1000 @filterArgs 2>$null | Out-Null }
+                    try { dotnet run --project $proj -c Release --no-build -- --rounds $Rounds --round-ms ([Math]::Max(60, $RoundMs)) --warmup-ms 1000 @filterArgs @libArgs 2>$null | Out-Null }
                     finally { Pop-Location }
                 }
                 Copy-Item (Join-Path $r 'benchmarks/results/dotnet.json') (Join-Path $results "dotnet-$($s.Name)-$i.json")
@@ -231,8 +237,13 @@ function Report([string]$title, $a, $b, [scriptblock]$isControl) {
     }
     $noise = if ($control.Count) { Median $control } else { 0 }
     $threshold = [Math]::Max(3, 2 * $noise)
-    # A bimodal case can land in its slow mode more often on one side: every alternation must show the change.
-    foreach ($l in $lines) { $l.Consistent = @($l.Runs | Where-Object { [Math]::Sign($_) -ne [Math]::Sign($l.P) -or [Math]::Abs($_) -lt $threshold / 2 }).Count -eq 0 }
+    # A bimodal case can land in its slow mode more often on one side: every alternation must show the change, and
+    # the alternations must agree with each other at least as closely as the size of the change.
+    foreach ($l in $lines) {
+        $agree = @($l.Runs | Where-Object { [Math]::Sign($_) -ne [Math]::Sign($l.P) -or [Math]::Abs($_) -lt $threshold / 2 }).Count -eq 0
+        $spread = if ($l.Runs.Count) { ($l.Runs | Measure-Object -Maximum -Minimum) } else { $null }
+        $l.Consistent = $agree -and (-not $spread -or ($spread.Maximum - $spread.Minimum) -le [Math]::Max($threshold, [Math]::Abs($l.P)))
+    }
     $marked = @($lines | Where-Object { [Math]::Abs($_.P) -gt $threshold -and $_.Consistent })
     $faster = @($marked | Where-Object { $_.P -lt 0 }).Count; $slower = $marked.Count - $faster
     $geo = GeoPct $ratios; $geoControl = GeoPct $controlRatios

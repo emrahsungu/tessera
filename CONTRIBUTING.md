@@ -30,9 +30,10 @@ the C++ runtime, and `-Package` when you change the package or its MSBuild files
   powershell scripts/ab.ps1 -Candidate HEAD -Out ab-report.md
   ```
 
-  Both commits are built in their own worktrees and run in alternating order, with the other libraries (FlatBuffers,
-  MessagePack, Protocol Buffers, JSON, MemoryPack) as the noise control. A change is kept when no Tessera row gets slower beyond the noise and buffers do not grow (unless that
-  is the point of the change). On CPUs affected by the JCC erratum (Skylake and its successors up to Comet Lake), add
+  Both commits are built in their own worktrees and run in alternating order, with other libraries, whose code is the
+  same on both sides, as the noise control: every library for the C++ reads, MemoryPack and MessagePack for the .NET
+  writes (`-AllLibraries` times every one). A change is kept when no Tessera row gets slower beyond the noise and
+  buffers do not grow (unless that is the point of the change). On CPUs affected by the JCC erratum (Skylake and its successors up to Comet Lake), add
   `-Jcc` when rows move in code the change does not touch.
 - **Tests:** new behavior needs a test. For readers that is usually an export in `tests/Tessera.Tests/InteropExport.cs`
   and a check in `tests/cpp/interop_test.cpp`; buffers the verifier must reject belong in the fuzz corpus

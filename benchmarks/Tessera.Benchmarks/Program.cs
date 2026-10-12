@@ -19,12 +19,14 @@ using Perfolizer.Horology;
 using Tessera;
 
 // Usage: Tessera.Benchmarks [--export-only] [--quick] [--launches N] [--rounds N] [--round-ms N] [--warmup-ms N] [--filter text]
+//                           [--libraries name,name]
 //        Tessera.Benchmarks --report <results dir> <out.md>
 // 1. builds the workloads, writes every library's buffer and the expected checksums for the C++ benchmark,
 // 2. times serialization with BenchmarkDotNet (unless --export-only) and writes benchmarks/results/dotnet.json:
 //    every case in --launches processes of its own (default 1), each N iterations of about --round-ms after warmup.
 //    Several launches matter: dynamic PGO does not settle on the same code in every process.
-// --filter keeps only cases whose "workload/library/variant" contains the text (for focused tuning).
+// --filter keeps only cases whose "workload/library/variant" contains the text (for focused tuning), and --libraries
+// only those libraries' cases (a name includes its variants: "Tessera" also selects "Tessera (no sharing)").
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
 if (args.Length == 3 && args[0] == "--report")
 {
@@ -58,7 +60,13 @@ if (exportOnly) return 0;
 
 int filterAt = Array.IndexOf(args, "--filter");
 string filter = filterAt >= 0 && filterAt + 1 < args.Length ? args[filterAt + 1] : "";
-WriteBenchmarks.Selected = Catalog.Keys.Where(k => k.Contains(filter, StringComparison.Ordinal)).ToList();
+int librariesAt = Array.IndexOf(args, "--libraries");
+string[] libraries = librariesAt >= 0 && librariesAt + 1 < args.Length
+    ? args[librariesAt + 1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    : [];
+WriteBenchmarks.Selected = Catalog.Keys
+    .Where(k => k.Contains(filter, StringComparison.Ordinal) && (libraries.Length == 0 || libraries.Any(l => IsLibrary(k, l))))
+    .ToList();
 
 // One process per case and collections forced between iterations (both BenchmarkDotNet's defaults). Result arrays up
 // to 4 MB are allocated as ordinary objects that die young: with the default large-object threshold (85 KB), the full
@@ -196,6 +204,13 @@ int ArgInt(string name, int fallback)
 {
     int i = Array.IndexOf(args, name);
     return i >= 0 && i + 1 < args.Length && int.TryParse(args[i + 1], out int v) ? v : fallback;
+}
+
+// Whether a "workload/library/variant" key is the library's, or one of its variants' ("Tessera (no sharing)").
+static bool IsLibrary(string key, string library)
+{
+    string name = key.Split('/')[1];
+    return name == library || name.StartsWith(library + " (", StringComparison.Ordinal);
 }
 
 /// <summary>Median, extremes and median absolute deviation of one case's iterations.</summary>
