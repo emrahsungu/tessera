@@ -74,7 +74,7 @@ public static class Report
         }
 
         sb.AppendLine();
-        sb.AppendLine("MessagePack has no separate verify step: its \"verify\" is a full parse into a tree, which its traversal and random access then use (those two are left out of the MessagePack column because they exclude the parse).");
+        sb.AppendLine("MessagePack has no separate verify step: its \"verify\" is a full parse into a tree, which its traversal and random access then use (those two are left out of the MessagePack column because they exclude the parse). msgpack-cxx parses into a reused zone, with strings and binary data referenced in the buffer rather than copied (its zero-copy option): its fastest way, measured. Its tree for the traversal, random access and lookups is parsed once with the strings copied: that reads as fast and scans keys twice as fast.");
         sb.AppendLine();
         sb.AppendLine($"Where Tessera is slower in these results (by more than {(SlowerMargin - 1) * 100:0}% for the C++ reads), and why:");
         sb.AppendLine();

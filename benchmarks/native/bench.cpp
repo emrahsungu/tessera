@@ -32,6 +32,10 @@ namespace {
 
 volatile std::uint64_t g_sink;
 
+// msgpack-cxx copies strings and binary data into its zone unless a reference function says to point into the
+// buffer. Every buffer here outlives its parses, so they are referenced in place (msgpack-cxx's zero-copy option).
+bool reference_in_place(msgpack::type::object_type, std::size_t, void*) { return true; }
+
 struct Buffer {
     std::unique_ptr<std::uint64_t[]> storage;  // 8-byte aligned, as a file loaded by an engine would be
     std::size_t size = 0;
@@ -176,6 +180,9 @@ int main(int argc, char** argv) {
             if (!fb_verify(v)) { std::fprintf(stderr, "%s: flatbuffers verify failed\n", w.c_str()); ok = false; }
             check(w + ".fb", fb_walk(fb_root(fbb.data())), want);
         }
+        // The tree that the traversal, random access and lookups read is parsed once, with its strings copied into its
+        // zone: it reads as fast as a tree pointing into the buffer and scans keys twice as fast (measured). The timed
+        // parses below leave the strings in the buffer, which parses faster.
         parsed.push_back(msgpack::unpack(reinterpret_cast<const char*>(mp.data()), mp.size));
         // Shallow copy of the root object; its zone stays alive in `parsed` (handles may move, the zone does not).
         const auto mpo = std::make_shared<msgpack::object>(parsed.back().get());
@@ -196,7 +203,13 @@ int main(int argc, char** argv) {
 
         cases.push_back({w, "Tessera", "verify", [=] { return static_cast<std::uint64_t>(tessera::verify<TesseraRoot>(inp, ins)); }, {}});
         cases.push_back({w, "FlatBuffers", "verify", [=] { flatbuffers::Verifier v(fbp, fbs); return static_cast<std::uint64_t>(fb_verify(v)); }, {}});
-        cases.push_back({w, "MessagePack", "verify (parse)", [=] { auto oh = msgpack::unpack(mpp, mps); return static_cast<std::uint64_t>(oh.get().via.array.size); }, {}});
+        // The parsers reuse their memory from one parse to the next. msgpack-cxx's zone gets one chunk larger than any
+        // tree here, which clear() keeps, so a parse allocates nothing.
+        auto zone = std::make_shared<msgpack::zone>(mps * 16 + 65536);
+        cases.push_back({w, "MessagePack", "verify (parse)", [=] {
+            zone->clear();
+            return static_cast<std::uint64_t>(msgpack::unpack(*zone, mpp, mps, &reference_in_place).via.array.size);
+        }, {}});
 
         cases.push_back({w, "Tessera", "full traversal", [=] { return tessera_walk(tessera::root_unchecked<TesseraRoot>(inp)); }, {}});
         cases.push_back({w, "FlatBuffers", "full traversal", [=] { return fb_walk(fb_root(fbp)); }, {}});
@@ -211,8 +224,8 @@ int main(int argc, char** argv) {
             return fb_verify(v) ? fb_walk(fb_root(fbp)) : 0;
         }, {}});
         cases.push_back({w, "MessagePack", "verify + traversal", [=] {
-            auto oh = msgpack::unpack(mpp, mps);
-            return mp_walk(oh.get());
+            zone->clear();
+            return mp_walk(msgpack::unpack(*zone, mpp, mps, &reference_in_place));
         }, {}});
 
         cases.push_back({w, "Tessera", "random access x1000", [=] {
@@ -238,8 +251,8 @@ int main(int argc, char** argv) {
         cases.push_back({w, "Tessera", "open + read one field", [=] { return tessera_pick(tessera::root_unchecked<TesseraRoot>(inp), mid); }, {}});
         cases.push_back({w, "FlatBuffers", "open + read one field", [=] { return fb_pick(fb_root(fbp), mid); }, {}});
         cases.push_back({w, "MessagePack", "open + read one field", [=] {
-            auto oh = msgpack::unpack(mpp, mps);
-            return mp_pick(oh.get(), mid);
+            zone->clear();
+            return mp_pick(msgpack::unpack(*zone, mpp, mps, &reference_in_place), mid);
         }, {}});
 
         // Tessera with full sharing (equal objects and vectors stored once), and Tessera's verifier with UTF-8 validation.
