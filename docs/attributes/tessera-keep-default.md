@@ -1,5 +1,8 @@
 # `[TesseraKeepDefault]`
 
+**What it does:** always writes the field, even when it equals its default value. A number, enum or plain-struct
+field is then also stored at a fixed position in the object, so C++ reads it with a single memory load.
+
 ```csharp
 public class Sample
 {
@@ -10,33 +13,32 @@ public class Sample
 }
 ```
 
-On a non-nullable field or property. Always stores the member, even when it equals its default. Scalars, enums and
-plain structs marked with it become **fixed cells**: they come first in the object, at constant positions, without a
-presence bit, so C++ reads one with a single load.
+Normally, each object records which fields were written (one bit per field), and leaves out fields equal to their
+default. Reading a field then means checking its bit and computing where it is. A `[TesseraKeepDefault]` field is
+always there, at the same position, so neither step is needed.
 
-## Use it when
+## When you need it
 
-- **The member is almost always set**: timestamps, ids, positions, values. Leaving out the rare default saves nothing,
-  and the presence bit costs a little on every read. On the benchmark's time series, marking the always-set values
-  made random reads 20–33% faster and verification up to 7% faster, at the same size.
-- **The member's default may change.** A member equal to its default is normally not stored, and readers fill in the
-  default they were compiled with, so changing a default changes what old buffers read. A member that is always
-  stored is immune ([Defaults](default-value.md#changing-a-default)).
-- **C++ must tell "set to the default" from "not set"** for a non-nullable value: with the attribute, `has_x()` is
-  true whenever the buffer was written by a version that had the member.
+- **The field is almost always set**: timestamps, IDs, positions, measured values. Leaving out the rare default saves
+  nothing. On the benchmark's time series, marking the always-set fields made random reads 20–33% faster and
+  validation up to 7% faster, at the same size.
+- **The field's default may change.** Saved data leaves out fields equal to the default, and readers fill in the
+  default they were compiled with. A field that is always written doesn't depend on it
+  ([Changing a default](default-value.md#changing-a-default)).
+- **C++ must know whether the value was set, even when it equals the default**: `has_x()` is then true for all data
+  saved by a version of the class that has the attribute.
 
 ## When not to use it
 
-- On members that usually equal their default, such as flags or counters that are mostly zero: each one then takes
-  its full size in every object.
-- On nullable members: they already store every non-null value, and null means absent.
+- On fields that usually equal their default, such as flags or counters that are mostly zero: each one then takes its
+  full size in every object.
+- On nullable fields: they already save every non-null value.
 
 ## Details
 
-- Only scalars, enums and plain structs become fixed cells. On strings, objects and vectors, the attribute only means
-  "store even when equal to the default".
-- Adding or removing the attribute changes the type's layout, so readers built before the change translate buffers
-  written after it (and vice versa), matching the member by name, once when the buffer is opened
-  ([Schema evolution](../guide/schema-evolution.md)).
-- `WriteDefaults = true` stores every member's default for one write; the attribute does it for one member, always,
-  and adds the fixed position ([Writing in .NET](../guide/writing.md#writedefaults)).
+- Only numbers, enums and plain structs get a fixed position. On a string, object or list field, the attribute only
+  means "write it even when it equals its default".
+- Adding or removing the attribute changes the class's binary layout. Data saved with the other version still loads:
+  the reader converts it once when opening it ([Changing your classes](../guide/versioning.md)).
+- `WriteDefaults = true` writes every field's default, for one save; the attribute does it for one field, always,
+  and adds the fixed position ([`WriteDefaults`](../options/write-defaults.md)).

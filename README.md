@@ -101,22 +101,22 @@ Orc: hp 100, mana 25, position 1 2 3
   Bow: damage 4
 ```
 
-`hp` was not stored, because it equaled its default, so C++ returned the default compiled into its header. A view is
-one pointer into the buffer: keep the buffer (and the `Reader`) alive while you use it. The whole example, including
-loading the file, is in [samples/Quickstart](samples/Quickstart).
+`hp` wasn't saved, because it equaled its default value, so C++ returned the default compiled into the header. `orc`
+is a pointer into the buffer, wrapped in a class: keep the buffer (and the `Reader`) alive while you use it. The whole
+example, including loading the file, is in [samples/Quickstart](samples/Quickstart).
 
 ### What the 328 bytes hold
 
 | Part | Bytes | Contents |
 |---|---:|---|
-| Header | 16 | root offset, magic, format version, layout fingerprint |
+| Header | 16 | where the top-level object starts, a format marker and version, and a hash of the classes' layout |
 | Data | 88 | the orc (28), the weapon list (12), two weapons (12 each) and three strings (8 each) |
-| Schema | 224 | the hashed member names and the layouts of `Monster`, `Weapon`, `Vec3` and the list |
+| Schema | 224 | a description of `Monster`, `Weapon`, `Vec3` and the list: each field's name (as a hash) and type |
 
-The schema lets readers built from older or newer versions of these classes read the buffer: add, delete or reorder
-members whenever you like (see [Schema evolution](#schema-evolution)). Its size depends on the types, not on the data,
-so it only matters for small buffers. When the writer and the reader are always built from the same classes, leave it
-out:
+The schema lets programs built from older or newer versions of these classes read the buffer: add, remove or reorder
+fields whenever you like ([Changing your classes](docs/guide/versioning.md)). Its size depends on the classes, not on
+the data, so it only matters for small buffers. When the writer and the reader are always built from the same classes,
+leave it out ([`IncludeSchema`](docs/options/include-schema.md)):
 
 ```csharp
 byte[] small = TesseraSerializer.Serialize(orc, new TesseraOptions { IncludeSchema = false });  // 104 bytes
@@ -158,11 +158,12 @@ To use this repository's projects in your solution instead of the package, see
 Tessera was built for game tooling: UI prefabs, records, scene graphs and time series authored in .NET and loaded by a
 C++ engine. Both sides are generated from the same C# source, so they cannot drift apart.
 
-- **Your classes are the schema.** No IDL and no required attributes: classes, records, structs, enums, nullable
-  values, lists, dictionaries, and abstract classes or interfaces as unions. Unsupported types are reported at compile
-  time with a suggested replacement.
-- **Zero-copy reads.** After one verification pass, every access is a plain load: no parsing, no allocations.
-- **Readable C++.** One header per type, `std::optional` for nullable members, `std::string_view` for strings,
+- **Your classes are the schema.** No separate schema file and no required attributes: classes, records, structs,
+  enums, nullable values, lists, dictionaries, and fields declared as an abstract class or interface, which can hold
+  any derived class. Types that can't be saved are reported at compile time, with a suggested replacement.
+- **No parsing.** C++ validates a buffer once; after that, every field read is a plain memory load: nothing is parsed,
+  copied or allocated.
+- **Readable C++.** One header per class, `std::optional` for nullable fields, `std::string_view` for strings,
   `enum class` with your names, and `const S&` straight into the buffer for plain structs.
 - **Fast.** Saving is 6.4× faster than FlatBuffers, 2.3× faster than MessagePack-CSharp and 4.6× faster than
   Google.Protobuf, with no memory allocated besides the result (none at all with a reused writer). Validating a buffer
@@ -173,8 +174,8 @@ C++ engine. Both sides are generated from the same C# source, so they cannot dri
 - **Compact.** Fields that are null or equal to their default take no space, and equal strings are stored once:
   buffers are up to 70% smaller than FlatBuffers' (1.3× on the geometric mean). MessagePack and Protocol Buffers,
   which store small integers in fewer bytes, are about 10% smaller.
-- **Schema evolution by name.** Add, delete, reorder and rename members anywhere, with no field ids or deprecated
-  slots; old and new readers keep working.
+- **Versioning by name.** Add, remove, reorder and rename fields anywhere, with no field numbers to manage: older and
+  newer programs read each other's data ([Changing your classes](docs/guide/versioning.md)).
 - **Hardened.** About 450,000 fuzzed buffers per test run under GCC's AddressSanitizer and UBSan, MSVC and Clang, and
   every change to the format or the reader is benchmarked against the commit before it.
 - **Apache-2.0** licensed.
@@ -300,291 +301,115 @@ commit before it with `scripts/ab.ps1` (see [How to build](#how-to-build)).
 
 ## 5. How it works
 
-A Roslyn source generator turns ordinary C# classes, records and structs into allocation-free writers, and writes a
-readable C++20 header of view classes for the same types. C++ verifies a buffer once and then reads it where it lies:
-every accessor is a plain load.
+During the build, a source generator (code that runs inside the C# compiler) reads your classes and writes two things
+for each: a C# serializer, and a C++ header with an accessor class. At run time, the serializer turns objects into a
+buffer, and C++ validates the buffer once, then reads fields straight from it.
 
 ```text
-C# models: plain classes, records and structs
+your C# classes and structs
         │
-        │  source generator, at build time
+        │  source generator, during the build
         ▼
-.NET writer ───► buffer: presence bits, inline values, forward offsets, optional schema
+C# serializer ───► buffer: for each object, which fields are stored, their values, offsets to
+                   strings and lists, and (optionally) a description of the classes
                     │
                     ▼
-          C++20 tessera::Reader<T>: verifies once
+          C++ tessera::Reader<T>: validates the buffer once
                     │
                     ▼
-          generated views: plain loads, no parse, no allocation
+          generated accessor classes: every field read is a memory load,
+          nothing is parsed, copied or allocated
 ```
 
-### Presence bits instead of a vtable
+### Each object records which fields it has
 
-An object is a presence bitmap followed by the cells of its present members. Members that are absent, null or equal
-to their default take no space at all, and bools live in the bitmap itself (two bits: present, value).
+An object starts with one bit per field, saying whether the field is stored, followed by the values of the stored
+fields ("cells"). Fields that are null or equal to their default take no space, and `bool` fields live in the bits
+themselves (two bits: stored, value).
 
 ```text
    0          4W              4W+F
    ┌──────────┬───────────────┬───────┬───────┬─────────┬────────┬───
-   │ presence │ fixed cells   │ cell  │ cell  │ offset  │ offset │ …     only present cells are stored,
-   │ bitmap   │ (opt-in)      │ 8 B   │ 4 B   │ string  │ vector │       sorted by alignment, then size
+   │ bits:    │ fields at     │ value │ value │ offset  │ offset │ …     only stored fields take space,
+   │ stored?  │ fixed places  │ 8 B   │ 4 B   │ string  │ list   │       sorted by alignment, then size
    └──────────┴───────────────┴───────┴───────┴─────────┴────────┴───
 
-   position of a cell = 4W + F + Σ size × popcount(presence & mask)
-                        one popcount per run of equal-size cells, or one load
-                        per byte of presence bits from a table of cell sizes
+   position of a field = 4W + F + Σ size × popcount(bits & mask)
+                         one popcount per run of equal-size values, or one load
+                         per byte of bits from a table of value sizes
 ```
 
-The generator knows every type's layout, so the masks and sizes are compile-time constants in the C++ header: reading
-a member is a bit test, one or a few popcounts and a load, with no vtable and no hash. Where the cells before a member
-have different sizes, a byte of presence bits indexes a 256-entry table of their sizes instead (types with the same
-cell sizes share it): one load replaces several popcounts, and a load waits for its data outside the CPU's scheduler,
-so more independent reads overlap. Values of 8 bytes or less and plain structs (C layout) are stored inline; strings,
-vectors, objects and union members sit behind forward offsets.
+The generator knows every class's layout, so the C++ header contains the bit masks and sizes as constants. Reading a
+field is a bit test, one or a few `popcount` instructions (to count the stored fields before it) and a memory load:
+no per-object table of positions (FlatBuffers stores one, its "vtable") and no hashing. Where the fields before a
+field have different sizes, one byte of the bits indexes a 256-entry table of their total size instead: one load
+replaces several popcounts, and more independent reads overlap inside the CPU. Values of 8 bytes or less, and plain
+structs, are stored in the object; strings, lists, nested objects and polymorphic values are stored elsewhere and
+referenced by an offset.
 
-### Fixed cells for members that are always set
+### Fields that are always set: fixed positions
 
-Members marked `[TesseraKeepDefault]` (scalars, enums and plain structs) are always stored, so they need no presence
-bit: they come first, at constant positions, and reading one is a single load. On the time series workload, that makes
-random reads 20–33% faster and verification up to 7% faster, at the same size.
+Fields marked [`[TesseraKeepDefault]`](docs/attributes/tessera-keep-default.md) (numbers, enums and plain structs) are
+always stored, so they need no bit: they come first, at fixed positions, and reading one is a single load. On the time
+series workload, that makes random reads 20–33% faster and validation up to 7% faster, at the same size.
 
 ### Written back to front
 
-The writer builds a buffer from the end, so every offset points forward and cycles are impossible. With
-`Sharing.Strings` (the default), equal strings are written once; with `Sharing.All`, equal strings, vectors, shared
-structs and objects are written once, and the buffer becomes a DAG. Writers are generated per type: no reflection, and
-with a reused `TesseraWriter` no allocations (except a dictionary other than `Dictionary<TKey, TValue>`, such as a
-`SortedDictionary`, whose enumerator is allocated: about 230 bytes).
+The serializer builds a buffer from its end, so every offset points forward and cycles are impossible. Repeated values
+can be stored once ([`Sharing`](docs/options/sharing.md)): by default equal strings; with `Sharing.All` also equal
+lists, objects and shared structs, which turns the buffer into a graph without cycles (a DAG). The serializers are
+generated code, so no reflection runs, and with a reused `TesseraWriter` nothing is allocated (except the enumerator of
+a dictionary that isn't a `Dictionary<TKey, TValue>`, such as a `SortedDictionary`: about 230 bytes).
 
-### Verify once, then plain loads
+### Validate once, then plain loads
 
-`tessera::Reader<T>` checks the whole buffer before the first access: the header, every object's bitmap and cells,
-every offset (non-null where required, forward, in bounds and aligned), string and vector lengths, union tags, and
-nesting depth, plus UTF-8 if you ask. The verifier is generated per type. Shared items in a DAG
-would be visited once per path, which grows exponentially with nesting; when the walk outgrows the buffer, the
-verifier switches to checking each shared item once (the only case in which it allocates, for its memo). After
-verification, accessors are bounds-free loads.
+`tessera::Reader<T>` checks the whole buffer before the first read: the header, every object's bits and values, every
+offset (in bounds, pointing forward, aligned, and present where required), every string's and list's length, every
+type ID of a polymorphic field, the nesting depth, and, if you ask, that strings are valid UTF-8. The validator is
+generated for each class. In a buffer with shared values, a value reached by many paths would be checked once per
+path, which can grow exponentially with nesting; when that adds up to more work than the buffer's size, the validator
+switches to checking each shared value once (the only case in which it allocates memory, to remember what it
+checked). After validation, reading a field needs no bounds check.
 
-### Same models: compile-time positions; other models: translate once
+### Same classes: direct reads; another version: converted once
 
 ```text
-buffer fingerprint == compiled fingerprint  ──►  compile-time positions, no lookups
-                   !=                       ──►  parse the buffer's schema once, match members by the
-                                                 xxHash64 of their names, translate the buffer into
-                                                 the reader's layout, then compile-time positions
+buffer's layout hash == the header's  ──►  fields at positions known at compile time, no lookups
+                     !=               ──►  read the buffer's description of its classes once, match fields
+                                           by the hash of their names, convert the buffer into the reader's
+                                           layout, then read as above
 ```
 
-Every buffer records a fingerprint of its root type's layout. A reader built from the same models takes the fast
-path. A reader built from other models matches members by name once, when the `Reader` is opened, and translates the
-buffer into a copy in its own layout, so every read afterwards is the same plain load as on the fast path; members
-it does not find read as absent. Translation costs one copy of the buffer at open (items shared in the buffer stay
-shared), and the copy lives as long as the `Reader`. The binder compares layouts structurally and never trusts the
-buffer's fingerprints for safety. See [docs/FORMAT.md](docs/FORMAT.md) for the complete wire format.
+Every buffer records a hash of its classes' layout. A reader built from the same classes reads the buffer directly. A
+reader built from another version matches the fields by name once, when the `Reader` opens the buffer, and converts the
+buffer into its own layout, so every later read is the same plain load; fields it doesn't find read as missing. The
+conversion costs one copy of the buffer when opening (values stored once stay stored once), and the copy lives as long
+as the `Reader`. The matching compares the actual layouts, and never trusts the buffer's hashes for safety.
+[docs/FORMAT.md](docs/FORMAT.md) describes every byte.
 
 ### Generated code
 
 | Generated | Where | Contents |
 |---|---|---|
-| C# writers | compiled into your assembly | one writer per type, presence bits computed while writing, no reflection |
-| C++ headers | `TesseraCppOutputDir` after each build | one header per type (by C++ namespace) and one per assembly that includes them all |
-| C++ runtime | copied next to the headers | header-only: views, `Reader`, verifier, schema translation, JSON dump |
+| C# serializers | compiled into your assembly | one per class, no reflection |
+| C++ headers | `TesseraCppOutputDir`, after each build | one per class (in a folder per C++ namespace), and one per assembly that includes them all |
+| C++ library | copied next to the headers | header-only: accessor classes, `Reader`, validation, conversion between versions, JSON output |
 
-## 6. Types
+## 6. Documentation
 
-| C# | C++ accessor returns |
-|---|---|
-| `bool`, `sbyte` … `ulong`, `float`, `double` | the same scalar type (`std::int32_t` …) |
-| `char` | `char16_t` |
-| enum (any integer base, `[Flags]` too) | `enum class` with the same values (flags get `\|`, `&`, `~`) |
-| `T?` for value types | `std::optional<T>` |
-| `string` | `std::string_view` (UTF-8; null → `data() == nullptr`) |
-| struct with only unmanaged fields | a C++ struct of the same layout, returned as `const S&` (stored inline) |
-| class, record, struct with references | a view class with one accessor per member |
-| `T[]`, `List<T>`, `IReadOnlyList<T>`, any `IEnumerable<T>` | `tessera::Vector<T>` (random access, range-for); `List<int?>` gives `tessera::Vector<std::optional<std::int32_t>>` |
-| `Dictionary<K, V>`, `IReadOnlyDictionary<K, V>`, any `IDictionary<K, V>` (keys: integers, chars, enums, strings) | `tessera::Map<K, V>`: `find(key)` and `contains(key)` (binary search), `keys()`, `values()` |
-| abstract class or interface | a union view: `type()`, `as_potion()` … |
+The [documentation](docs/README.md) explains everything, with an example and the use cases for each part:
 
-Public fields and properties are serialized, as are internal ones declared in the same assembly. Properties need a
-setter or must be auto-properties. Leave a member out with `[TesseraIgnore]`, `[IgnoreDataMember]` or `[NonSerialized]`.
-`DateTime`, `Guid`, `decimal` and similar types have no portable C++ form; they are reported at compile time with a
-suggested replacement (for example `DateTime.Ticks` as a `long`).
-
-### Unions
-
-A member whose type is an abstract class or an interface holds any of the classes that derive from it or implement it:
-
-```csharp
-public abstract class Item { }
-public sealed class Potion : Item { public int Heal; }
-public sealed class Key : Item { public uint Door; }
-
-public class Chest { public Item? Loot; }
-```
-
-```cpp
-if (game::Potion potion = chest.loot().as_potion()) use(potion.heal());
-else if (game::Key key = chest.loot().as_key()) use(key.door());
-```
-
-### Which types are models
-
-A class, record or struct is a model when its project does one of these:
-
-- **serializes it:** `TesseraSerializer.Serialize(value)` or `Write(writer, value)`, where the compiler knows the type
-  of `value`;
-- **uses it in a model:** as a member, as the element or value type of a collection, or as a concrete class deriving
-  from the type of an abstract or interface member (every public or internal one in the project, unless
-  `[TesseraUnion]` lists them);
-- **marks it:** `[Tessera]` on the type, or `[assembly: TesseraRoot(typeof(Monster))]` in the project, for types you
-  cannot or would rather not edit.
-
-`[Tessera]` is optional. With or without it:
-
-- **Every call has a writer.** A `Serialize` or `Write` call whose type is known compiles only if a writer exists
-  for that type. Calls that could never work, for example with an abstract type, a collection or a private class,
-  are compile errors. Only generic code hides the type: a call that serializes a type parameter `T` is reported
-  (TESSERA010, info), and the types it writes must be models for another reason.
-- **A bare `[Tessera]` changes nothing in its own project.** On a type that is already a model there, it changes no
-  byte of any buffer and no line of the generated C# or C++ (the tests check this). It changes how other projects
-  see the type, as the table below shows.
-
-What the attribute adds:
-
-| | Without `[Tessera]` | With `[Tessera]` or `[assembly: TesseraRoot]` |
-|---|---|---|
-| Model | when its project serializes it or a model uses it | always: C++ gets its header even if no C# code writes it |
-| Buffers and generated code | the same | the same |
-| Union member of this project's abstract types | yes, when public or internal and not generic | yes |
-| Union member of another project's abstract types | no | yes |
-| Member initializers visible to other projects | when its own project treats it as a model | yes |
-| Stable type name (the source of union tags) | the C# type name | the C# type name, or `[Tessera("Name")]` |
-| Under `TesseraRequireAttribute` | error TESSERA012 | accepted |
-
-Member initializers are compiled into constructors, which the generator cannot read in a referenced assembly. So
-each project's generator records the initializers of its own models in its assembly, and other projects read them
-from there. When a type's project does not treat it as a model, nothing is recorded: another project that uses the
-type takes zero as the default of its members and warns (TESSERA011). Mark those types in their project, list them in
-`TesseraRoot` there, or give the members `[DefaultValue]`.
-
-**Strict mode.** Set `<TesseraRequireAttribute>true</TesseraRequireAttribute>` to require a mark on every model
-class, record and struct with references (TESSERA012), so that no type joins the wire format unannounced. Enums,
-plain structs and abstract union bases need no mark.
-
-### Attributes
-
-| Attribute | Effect |
-|---|---|
-| `[TesseraName("old")]` | wire name of a member, so it can be renamed in C# |
-| `[DefaultValue(x)]`, initializer (`= 100`) | the default that is omitted from buffers and returned by C++ when absent |
-| `[TesseraKeepDefault]` | always store the member; scalars, enums and plain structs then sit at a fixed position with no presence bit |
-| `[TesseraShared]` | store a struct once behind an offset (useful for large repeated structs with `Sharing.All`) |
-| `[TesseraUnion(typeof(A), typeof(B))]` | the types allowed in an abstract or interface member (default: see [Which types are models](#which-types-are-models)) |
-| `[Tessera]`, `[Tessera("Name")]` | optional: makes the type a model; the name fixes its union tag (needed when two union members share a C# name) |
-| `[assembly: TesseraRoot(typeof(A), ...)]` | makes types models without editing them |
-
-## 7. Advanced features
-
-### The wire contract
-
-There is no schema file: the C# models are the schema, so the contract between writers and readers is implicit in
-them. A buffer depends on exactly these parts of the models:
-
-| Part of a model | Role on the wire | Changing it |
-|---|---|---|
-| Member name: the C# name, or `[TesseraName]` | identifies the member (`xxHash64` of the name) | makes a new member; the old one reads as absent. Keep the old name with `[TesseraName("OldName")]` |
-| Member kind: scalar type, string, object, vector and element kind, union, struct layout | must match for the member to be read | makes a new member. Some changes keep the kind: `int` ↔ `int?`, `int` ↔ an enum based on `int`, `List<T>` ↔ `T[]`, one class ↔ another (members match by name) |
-| Member default: initializer or `[DefaultValue]` | not stored: writers omit members equal to it, readers return their own | changes what old buffers read: a member left out because it equaled the old default now reads as the new one |
-| Names of union member types (without namespace), or `[Tessera("Name")]` | the union tag (`xxHash32` of the name) | old buffers' values of that type read as an unknown union member. Keep the old name with `[Tessera("OldName")]` |
-| Everything else: namespaces, the names of other types, member order, fields or properties, class or record | nothing | is free |
-
-Defaults are the easy part to miss. If a member's default may change, mark it `[TesseraKeepDefault]` (always stored)
-or write with `WriteDefaults = true`. A default can also change without an edit to the member: when a type from
-another project starts or stops being a model there, its initializers become visible or invisible to your project
-(see [Which types are models](#which-types-are-models)).
-
-### Schema evolution
-
-Members are identified by name, not by position. In FlatBuffers a field's slot is its identity: new fields go at the
-end (or every field needs an explicit `id`), deleted fields stay in the schema as `deprecated`, and moving a field
-breaks old buffers. In Tessera:
-
-- **Reorder members freely**, and turn fields into properties or back. The layout does not depend on declaration
-  order (cells are sorted by alignment, size and name hash), so the layout and the fingerprint stay the same, and
-  readers built from either version keep using compile-time positions.
-- **Add and delete members anywhere.** Each buffer carries a compact schema, 12 bytes per member and about 32 per type
-  (224 bytes in the [example](#1-example)), which you can turn off. A reader built from other models matches members
-  by name through it, once per buffer, and translates the buffer into its own layout. Members missing from a buffer
-  read as absent, with the reader's default (a `[TesseraKeepDefault]` member is always stored, so it reads as present,
-  with its default).
-- **Rename** a member by keeping its wire name: `[TesseraName("OldName")]`.
-- **Changing a member's kind** makes it a different member: readers of the other version see it as absent. A
-  dictionary whose value type changes keeps its keys and has no values there; one whose key type changes is empty.
-- **Unions:** new member types can be added. Old readers see an unknown `type()`, and every `as_x()` is empty.
-- Without the schema (`IncludeSchema = false`), a reader accepts only buffers whose fingerprint matches its own
-  (`Error::SchemaMismatch` otherwise): adding or deleting members then breaks old buffers, reordering does not.
-
-The C++ tests read old buffers with new readers and new buffers with old readers, with MSVC, GCC and Clang: the
-model versions are in [tests/Tessera.Tests/Evolution.cs](tests/Tessera.Tests/Evolution.cs), the checks in
-[tests/cpp/interop_test.cpp](tests/cpp/interop_test.cpp).
-
-### Write options
-
-`TesseraSerializer.Serialize(value, new TesseraOptions { ... })`:
-
-| Option | Default | |
-|---|---|---|
-| `Sharing` | `Strings` | `None`: fastest writes. `Strings`: equal strings stored once. `All`: equal strings, vectors and objects stored once (the buffer becomes a DAG) |
-| `IncludeSchema` | `true` | embed the schema so other model versions can read the buffer |
-| `WriteDefaults` | `false` | also store members equal to their default |
-| `MaxDepth` | `128` | nesting limit (objects and vectors); matches C++ `Options::max_depth` |
-
-To write without allocating, reuse a writer. The span points into the writer and is valid until its next use:
-
-```csharp
-var writer = new TesseraWriter();                          // or new TesseraWriter(options)
-ReadOnlySpan<byte> span = TesseraSerializer.Write(writer, orc);
-```
-
-### Dictionaries
-
-Dictionaries are written with their keys sorted (strings by code point, the order of their UTF-8 bytes), so C++ finds
-a key by binary search:
-
-```cpp
-if (auto stock = shop.items().find("item-0042")) use(stock->count());
-bool known = shop.prices().contains(7);
-```
-
-### Verification options and trusted buffers
-
-```cpp
-tessera::Options strict;
-strict.utf8 = true;                                   // also validate UTF-8 (default: false)
-strict.max_depth = 64;                                // nesting limit (default: 128)
-strict.max_items = 100'000;                           // objects and vectors verified (default: 2^24)
-tessera::Reader<game::Monster> checked(data, size, strict);
-
-// Buffers you wrote yourself, with exactly these models: no verification.
-tessera::Reader<game::Monster> trusted(data, size, tessera::trusted);
-```
-
-### Models across assemblies
-
-Models can span several assemblies. An assembly's headers also cover the model types it uses from other assemblies,
-and the headers for one type are identical whichever assembly wrote them, so including several assemblies' headers in
-one file works. A type that two different model versions define stops the build with an `#error`. The initializers of
-another project's types are visible only when that project treats them as models (see
-[Which types are models](#which-types-are-models)).
-
-### C++ naming and output
-
-MSBuild properties: `TesseraCppOutputDir`; `TesseraCppHeaderName` (default `<AssemblyName>.tessera.hpp`);
-`TesseraCppNamespace` (default: the C# namespace in lower case); `TesseraCppNaming` (`snake_case` (default), `camelCase`,
-`PascalCase` or `original`); `TesseraCppCopyRuntime` (default `true`).
-
-### Debugging
-
-`tessera::to_json(view)` prints any view, nested objects and vectors included.
+- [Supported types](docs/guide/supported-types.md): what each C# type becomes in C++, including lists, dictionaries,
+  plain structs, and fields declared as a base class or interface.
+- [Which types get generated code](docs/guide/generated-types.md), and when you need to mark one.
+- [Attributes](docs/attributes/README.md): `[Tessera]`, `[assembly: TesseraRoot]`, `[TesseraIgnore]`,
+  `[TesseraName]`, default values, `[TesseraKeepDefault]`, `[TesseraShared]`, `[TesseraUnion]`.
+- [Options](docs/options/README.md): [`Sharing`](docs/options/sharing.md), `IncludeSchema`, `WriteDefaults`,
+  `MaxDepth`, and the [C++ read options](docs/options/cpp-read-options.md).
+- [Changing your classes](docs/guide/versioning.md): which changes keep data saved earlier readable.
+- [Classes in several projects](docs/guide/multiple-projects.md), [MSBuild settings](docs/guide/msbuild.md), the
+  [C# API](docs/api/csharp.md) and the [C++ API](docs/api/cpp.md).
+- [Compiler messages](docs/diagnostics/README.md): every `TESSERA` error and warning, and how to fix it.
 
 ## Requirements
 

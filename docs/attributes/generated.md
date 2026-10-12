@@ -1,12 +1,12 @@
 # Generated attributes
 
-The source generator emits three assembly attributes into every project with models. They are public because other
-assemblies, and the header export tool, read them; you never write them yourself.
+The source generator adds three assembly attributes to every project it generates code for. You never write them
+yourself; they are public because other projects' generators, and the header export tool, need to read them.
 
-| Attribute | Carries | Read by |
+| Attribute | What it records | Who reads it |
 |---|---|---|
-| `[assembly: TesseraDefault(typeof(Monster), "Hp", 100)]` | the initializer of a member of one of this assembly's models (`public short Hp = 100;`) | the source generators of other projects that use the type, which cannot read initializers in compiled code ([Models in several projects](../guide/multiple-projects.md)) |
-| `[assembly: TesseraDeclared(typeof(Monster))]` | that this assembly treated the type as a model, so its `TesseraDefault` entries are complete | the same generators: a type without it makes them warn [TESSERA011](../diagnostics/TESSERA011.md) |
-| `[assembly: TesseraCppHeader("game/Monster.tessera.hpp", "...")]` | a generated C++ header | the `Tessera.Cpp` tool, which writes the headers to `TesseraCppOutputDir` after the build ([MSBuild settings](../guide/msbuild.md)) |
+| `[assembly: TesseraDefault(typeof(Monster), "Hp", 100)]` | the initial value of a field (`public short Hp = 100;`) | the source generator of another project that saves the type: it can't read initializers from compiled code ([Classes in several projects](../guide/multiple-projects.md)) |
+| `[assembly: TesseraDeclared(typeof(Monster))]` | that this project generated code for the type, so its `TesseraDefault` entries are complete | the same generators: a type without it triggers [TESSERA011](../diagnostics/TESSERA011.md) |
+| `[assembly: TesseraCppHeader("game/Monster.tessera.hpp", "...")]` | a generated C++ header | the `Tessera.Cpp` tool, which writes the headers to `TesseraCppOutputDir` after each build ([MSBuild settings](../guide/msbuild.md)) |
 
 `TesseraDefault` and `TesseraDeclared` are hidden from IntelliSense.

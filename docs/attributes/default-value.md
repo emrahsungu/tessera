@@ -1,40 +1,40 @@
-# Defaults: initializers and `[DefaultValue]`
+# Default values: initializers and `[DefaultValue]`
+
+**What it does:** sets a field's default value. A field equal to its default is not written to the buffer, and C++
+returns the default when the field is missing.
 
 ```csharp
 using System.ComponentModel;
 
 public class Monster
 {
-    public short Hp = 100;                 // initializer: the default is 100
+    public short Hp = 100;                 // the default is 100
 
     [DefaultValue(Color.Blue)]
     public Color Color { get; set; } = Color.Blue;
 }
 ```
 
-Every non-nullable member has a default: its initializer, its `[DefaultValue]` (System.ComponentModel), or else zero
-(`false`, `0`, the enum's zero value, an all-zero struct). A member equal to its default is not stored, and C++ returns
-the default compiled into the header when the member is absent:
-
 ```cpp
-std::int16_t hp = monster.hp();   // 100 when the buffer did not store it
-bool stored = monster.has_hp();   // false then
+std::int16_t hp = monster.hp();   // 100 when the buffer doesn't contain it
+bool saved = monster.has_hp();    // false then
 ```
 
-Nullable members (`int?`, strings, objects, collections) have no default: null means absent.
+Every non-nullable field has a default: its initializer, its `[DefaultValue]` (System.ComponentModel), or else zero
+(`false`, `0`, the enum's zero value, an all-zero struct). Nullable fields (`int?`, strings, objects, lists) have no
+default value: null means "missing".
 
-## Use `[DefaultValue]` when
+## When you need `[DefaultValue]`
 
-- **Another project uses the type** and its project does not treat the type as a model. Initializers are compiled into
-  constructors, which other projects cannot read; `[DefaultValue]` is metadata, which they can
-  ([TESSERA011](../diagnostics/TESSERA011.md)).
-- **The default should be visible** in the declaration, for tools or other serializers that read `[DefaultValue]`.
+An initializer is enough in most cases. Add `[DefaultValue]` when:
+
+- **another project saves the type** and the type's own project doesn't generate code for it. Other projects can't
+  read initializers from compiled code, but they can read `[DefaultValue]` ([TESSERA011](../diagnostics/TESSERA011.md));
+- **other tools or serializers** read `[DefaultValue]` too.
 
 ## Changing a default
 
-The default is part of the wire contract: buffers leave the member out when it equals the default at write time, and
-readers fill in the default they were compiled with. If you change a default, members that old buffers left out read as
-the new default. If a default may change, mark the member [`[TesseraKeepDefault]`](tessera-keep-default.md), so it is
-always stored, or write with `WriteDefaults = true` ([Writing in .NET](../guide/writing.md#writedefaults)).
-
-See also: [Schema evolution](../guide/schema-evolution.md).
+Data saved earlier leaves out every field that was equal to the old default. After you change the default, those
+fields read as the new default. If a default may change, mark the field
+[`[TesseraKeepDefault]`](tessera-keep-default.md), which always writes it, or save with `WriteDefaults = true`
+([`WriteDefaults`](../options/write-defaults.md)).

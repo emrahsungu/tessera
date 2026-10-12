@@ -1,33 +1,27 @@
 # `[assembly: TesseraRoot]`
 
+**What it does:** the same as putting [`[Tessera]`](tessera.md) on each listed type: generates their C# serializers
+and C++ headers. You list the types in one place instead of annotating each class.
+
 ```csharp
-[assembly: TesseraRoot(typeof(Monster), typeof(World))]
+[assembly: TesseraRoot(typeof(SaveGame), typeof(Settings))]
 ```
 
-On the assembly, as often as you like. Makes the listed types models of this project, without editing them. For a type
-declared in this project, it has the same effect as [`[Tessera]`](tessera.md) on the type.
+Put it in any `.cs` file of the project, as often as you like.
 
-## Use it when
+## When you need it
 
-- **Your code serializes through generic methods.** In `Save<T>(T value) => TesseraSerializer.Serialize(value)` the
-  generator cannot see which types reach the call ([TESSERA010](../diagnostics/TESSERA010.md)). List them here:
-
-  ```csharp
-  [assembly: TesseraRoot(typeof(SaveGame), typeof(Settings))]
-  ```
-
-- **Only C++ reads a type**, and you would rather list your C++-facing types in one place than mark each one.
-- **The type lives in another project** that you cannot change, or that does not use Tessera itself. Listing it makes
-  it a model of your project: your project generates its serializer and its C++ header.
-- **You keep attributes out of your model classes**, for example in a shared library that should not depend on
-  Tessera. The list can live in the project that does the writing.
+- **Your code saves objects through a generic method**, such as
+  `Save<T>(T value) => TesseraSerializer.Serialize(value)`. The generator can't tell which types reach that call
+  ([TESSERA010](../diagnostics/TESSERA010.md)), so it generates nothing for them. List them here.
+- **The type is declared in another project** that you can't change, or that doesn't use Tessera. Listing it makes
+  this project generate the type's serializer and C++ header.
+- **You want to keep attributes out of your classes**, for example in a shared library that shouldn't depend on
+  Tessera.
 
 ## Details
 
-- A type of another project listed here is a model of your project, but its initializers are visible only if its own
-  project recorded them: see [TESSERA011](../diagnostics/TESSERA011.md) and
-  [Models in several projects](../guide/multiple-projects.md).
-- The types used by a listed type (members, elements, union members) become models too, as with any model.
-- Abstract classes and interfaces cannot be roots of a buffer; list their concrete types instead.
-
-See also: [Which types are models](../guide/models.md).
+- Types used by a listed type (field types, list element types, derived classes) get generated code too.
+- An abstract class or an interface can't be saved on its own; list its concrete classes.
+- For a type from another project, the initial values of its fields may not be visible here: see
+  [TESSERA011](../diagnostics/TESSERA011.md).

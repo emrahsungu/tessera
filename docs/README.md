@@ -1,29 +1,44 @@
 # Tessera documentation
 
-Tessera writes binary buffers from plain .NET objects, and C++20 reads them where they lie. These pages explain every
-part of it; the [README](../README.md) is the short tour.
+Tessera saves .NET objects as binary data that C++ reads directly, without parsing or copying. During compilation, a
+source generator writes two things for each of your classes: a C# serializer, which turns objects into bytes, and a
+C++ header with an accessor class, which reads the fields straight from those bytes.
+
+The [README](../README.md) is the short tour; these pages explain everything.
 
 ## Guide
 
 Read these in order the first time:
 
-1. [Installation](guide/installation.md): the NuGet package, or this repository's projects in your solution.
-2. [Your first model](guide/first-model.md): write a buffer in .NET, read it in C++.
-3. [Which types are models](guide/models.md): what the source generator picks up, and when `[Tessera]` matters.
-4. [Types](guide/types.md): every supported member type, unions, dictionaries and plain structs, and what to use
-   instead of the types Tessera does not support.
-5. [Writing in .NET](guide/writing.md): `TesseraSerializer`, reusing a `TesseraWriter`, and the write options.
-6. [Reading in C++](guide/reading-cpp.md): the headers, `Reader`, verification, views, errors and trusted buffers.
-7. [Schema evolution](guide/schema-evolution.md): the wire contract, and which changes old and new readers survive.
-8. [Models in several projects](guide/multiple-projects.md): headers and defaults across assemblies.
-9. [MSBuild settings](guide/msbuild.md): where the headers go, C++ names and namespaces, strict mode.
+1. [Installation](guide/installation.md): add the NuGet package, or use this repository's projects in your solution.
+2. [Getting started](guide/getting-started.md): save an object in C#, read it in C++.
+3. [Which types get generated code](guide/generated-types.md): which of your types Tessera generates code for, and
+   when you need to mark one.
+4. [Supported types](guide/supported-types.md): what each C# type becomes in C++: numbers, strings, lists,
+   dictionaries, structs, and fields declared as a base class or interface.
+5. [Writing in C#](guide/writing.md): the three ways to save, and the options.
+6. [Reading in C++](guide/reading-cpp.md): opening a buffer, validating it, reading fields, and errors.
+7. [Changing your classes](guide/versioning.md): which changes keep data saved earlier readable.
+8. [Classes in several projects](guide/multiple-projects.md): when your types are spread over several assemblies.
+9. [MSBuild settings](guide/msbuild.md): where the C++ headers go, and how things are named in C++.
+
+## Options
+
+Every option, with what it does and every case to use it in:
+
+- [Saving in C#](options/README.md): [`Sharing`](options/sharing.md) (`None`, `Strings`, `All`),
+  [`IncludeSchema`](options/include-schema.md), [`WriteDefaults`](options/write-defaults.md),
+  [`MaxDepth`](options/max-depth.md).
+- [Reading in C++](options/cpp-read-options.md): validation, the UTF-8 check, nesting and size limits, and reading
+  your own data without checks.
 
 ## Reference
 
-- [Attributes](attributes/README.md): one page per attribute, with its use cases.
-- [Diagnostics](diagnostics/README.md): every `TESSERA` warning and error, with its cause and fix.
-- [Wire format](FORMAT.md): the byte layout of a buffer.
+- [Attributes](attributes/README.md): every attribute, what it does and when to use it.
+- [C# API](api/csharp.md): every public class and method of the .NET library.
+- [C++ API](api/cpp.md): `Reader`, accessor classes, lists, dictionaries, errors.
+- [Compiler messages](diagnostics/README.md): every `TESSERA` error and warning, what causes it, and how to fix it.
+- [Binary format](FORMAT.md): the exact byte layout.
 - [Benchmark results](BENCHMARKS.md): every table behind the README's charts.
 
-Found a mistake or a gap? These pages live in the repository, next to the code they describe: fix them in a pull
-request.
+Found a mistake or a gap? These pages live in the repository next to the code: fix them in a pull request.

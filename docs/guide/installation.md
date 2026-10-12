@@ -1,8 +1,13 @@
 # Installation
 
-Tessera is one NuGet package. It holds the .NET runtime, the source generator, the tool that writes the C++ headers
-after each build, and the C++ runtime headers. There are two ways to use it: the package, or this repository's
-projects in your solution.
+Tessera is one NuGet package with four parts:
+
+- the .NET library you call (`TesseraSerializer`, the attributes);
+- a **source generator**: code that runs inside the C# compiler and writes a serializer for each of your classes;
+- a small tool that, after each build, writes the generated **C++ headers** to a folder you choose;
+- the C++ library those headers use (header-only C++20).
+
+You can use the package, or reference this repository's projects directly.
 
 ## A. The NuGet package
 
@@ -29,44 +34,44 @@ Reference the package, and choose where the C++ headers go:
   <PackageReference Include="Tessera" Version="0.1.0-preview" />
 </ItemGroup>
 <PropertyGroup>
-  <!-- After each build, the generated headers and the C++ runtime headers are written here. -->
+  <!-- After each build, the generated headers and the C++ library are written here. -->
   <TesseraCppOutputDir>cpp/generated</TesseraCppOutputDir>
 </PropertyGroup>
 ```
 
-The package brings the source generator along, so every build of your project generates the serializers and the
-headers. Without `TesseraCppOutputDir`, the headers stay inside the compiled assembly and nothing is written to disk.
+That's all: the package brings the source generator along, so every build generates the serializers and the C++
+headers. Without `TesseraCppOutputDir`, no headers are written to disk (they stay inside the compiled assembly).
 
-NuGet caches packages by version. After repacking the same version, delete `~/.nuget/packages/tessera`
-(`%USERPROFILE%\.nuget\packages\tessera` on Windows), or restore keeps using the old copy.
+NuGet caches packages by version number. If you rebuild the package without changing its version, delete
+`~/.nuget/packages/tessera` (`%USERPROFILE%\.nuget\packages\tessera` on Windows), or restore keeps the old copy.
 
 ## B. This repository's projects, in your solution
 
-To work on Tessera itself or step into its code, reference its projects instead of the package. Import one file at
+To work on Tessera itself, or to debug into its code, reference its projects instead of the package. Add one line at
 the end of your project file:
 
 ```xml
 <Import Project="path/to/tessera/src/Tessera.ProjectReference.targets" />
 ```
 
-It references three projects and the package's MSBuild files, so your project behaves exactly like one with the
+It adds three project references, plus the package's build settings, so your project behaves exactly as with the
 package:
 
-| Project | Referenced as | What it does |
+| Project | How it is referenced | What it is |
 |---|---|---|
-| `src/Tessera` | a project reference | the runtime: `TesseraSerializer`, `TesseraWriter`, the attributes |
-| `src/Tessera.Generator` | an analyzer (`OutputItemType="Analyzer"`, `ReferenceOutputAssembly="false"`) | the source generator: serializers and C++ headers |
-| `src/Tessera.Cpp` | built only (`ReferenceOutputAssembly="false"`) | writes the headers to `TesseraCppOutputDir` after each build |
+| `src/Tessera` | a normal project reference | the .NET library: `TesseraSerializer`, the attributes |
+| `src/Tessera.Generator` | as an analyzer (`OutputItemType="Analyzer"`, `ReferenceOutputAssembly="false"`) | the source generator |
+| `src/Tessera.Cpp` | built, but not referenced (`ReferenceOutputAssembly="false"`) | the tool that writes the C++ headers after each build |
 
-### Why a project reference to `src/Tessera` alone is not enough
+### Why a plain project reference to `src/Tessera` isn't enough
 
-A `<ProjectReference>` to `src/Tessera/Tessera.csproj` alone compiles: the attributes and `TesseraSerializer` are
-there. But a source generator runs only when it is referenced as an analyzer, and analyzers do not flow through
-project references. So no serializer is generated, and the first `TesseraSerializer.Serialize` call throws a
-`TesseraException` that says so and names the fix. A project inside the Tessera repository's folder also gets a build
-warning, [TESSERA015](../diagnostics/TESSERA015.md).
+A `<ProjectReference>` to `src/Tessera/Tessera.csproj` alone compiles fine: the attributes and `TesseraSerializer` are
+in that project. But the C# compiler only runs a source generator that is referenced **as an analyzer**, and a project
+reference doesn't pass analyzers on to the projects that reference it. So no serializers are generated, and the first
+`TesseraSerializer.Serialize` call throws a `TesseraException` that explains this and names the fix. Inside the
+Tessera repository's folder, the build also warns ([TESSERA015](../diagnostics/TESSERA015.md)).
 
-To write the references yourself instead of importing the file:
+If you'd rather write the references yourself:
 
 ```xml
 <ItemGroup>
@@ -76,12 +81,12 @@ To write the references yourself instead of importing the file:
 </ItemGroup>
 ```
 
-That gives you the serializers, but no C++ headers on disk: writing them takes `src/Tessera.Cpp` and the package's
-`build/Tessera.props` and `build/Tessera.targets`, which the import brings along.
+That gives you the serializers, but writes no C++ headers to disk: that takes `src/Tessera.Cpp` and the package's
+`build/Tessera.props` and `build/Tessera.targets`, which the import line adds.
 
 ## Requirements
 
 - .NET 8 or later, and a C# compiler from the .NET 8 SDK or later.
-- C++: a C++20 compiler. Tested with MSVC 19.42, clang-cl 19, GCC 15 and Clang 21. The C++ runtime is header-only.
+- C++: a C++20 compiler. Tested with MSVC 19.42, clang-cl 19, GCC 15 and Clang 21.
 
-Next: [Your first model](first-model.md).
+Next: [Getting started](getting-started.md).

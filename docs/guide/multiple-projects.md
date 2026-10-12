@@ -1,43 +1,43 @@
-# Models in several projects
+# Classes in several projects
 
-Models can span several assemblies: shared types in a library, game-specific types in the game, tool types in an
-editor plugin. Each project that references Tessera runs the source generator over its own code.
+Your classes can be spread over several projects: shared types in a library, game-specific types in the game, tool
+types in an editor plugin. Each project that references Tessera runs the source generator on its own code.
 
-## Headers
+## C++ headers
 
-An assembly's headers also cover the model types it uses from other assemblies, and the headers for one type are
-identical whichever assembly wrote them. So you can include several assemblies' headers in one C++ file. If two
-assemblies were built from different versions of one type's model, the headers for that type differ, and including
-both stops the C++ build with an `#error` naming the type.
+A project's headers also cover the classes it uses from other projects, and the header for one class is identical
+whichever project generated it. So you can include several projects' headers in one C++ file.
 
-## Member defaults across projects
+If two projects were built from different versions of one class, their headers for it differ, and including both
+stops the C++ build with an `#error` naming the class.
 
-A member's default comes from its initializer (`public short Hp = 100;`) or a `[DefaultValue]` attribute. Writers
-leave out members equal to their default, and readers return it, so both sides must agree on it.
+## Initial values of fields
 
-Initializers are compiled into constructors, which a source generator cannot read in a referenced assembly. So each
-project's generator records the initializers of its own models in its assembly (in a generated
-`[assembly: TesseraDefault]`), and other projects read them from there.
+A field's default value comes from its initializer (`public short Hp = 100;`) or from `[DefaultValue]`. Fields equal to
+it aren't saved, and readers return it, so every project must see the same default.
 
-A type's project records its initializers only when it treats the type as a model there. When it does not, a project
-that uses the type cannot see them: it takes zero as the default of those members, and warns
-([TESSERA011](../diagnostics/TESSERA011.md)). Three ways to fix it, in the type's own project:
+Initializers are compiled into constructors, and a source generator can't read code inside a referenced assembly. So
+each project's generator records the initializers of its own classes in its assembly (as generated
+`[assembly: TesseraDefault]` attributes), and other projects read them from there.
 
-- mark the type [`[Tessera]`](../attributes/tessera.md);
-- list it in [`[assembly: TesseraRoot(typeof(...))]`](../attributes/tessera-root.md);
-- or give the members `[DefaultValue(100)]`, which is visible from anywhere.
+A project records them only for classes it generates code for. If project `Game` saves a class from project `Data`
+that `Data` doesn't generate code for, `Game` can't see that class's initializers: it takes zero as the default of
+those fields, and warns ([TESSERA011](../diagnostics/TESSERA011.md)). Fix it in `Data`:
 
-## Unions across projects
+- mark the class [`[Tessera]`](../attributes/tessera.md);
+- or list it in [`[assembly: TesseraRoot(typeof(...))]`](../attributes/tessera-root.md);
+- or give the fields [`[DefaultValue(100)]`](../attributes/default-value.md), which every project can read.
 
-A union member's possible types are the concrete types that derive from its type. Inside one project, every public or
-internal one counts. Types from other projects count only when their project marks them with `[Tessera]` or lists them
-in `[assembly: TesseraRoot]`: a project cannot otherwise know which types of an assembly are meant to be models.
-[`[TesseraUnion]`](../attributes/tessera-union.md) lists the types explicitly instead.
+## Derived classes in other projects
 
-## One model, two projects
+A field declared as a base class or an interface may hold every derived class of its own project. Derived classes of
+**other** projects count only when their project marks them `[Tessera]` or lists them in `[assembly: TesseraRoot]`:
+the generator can't otherwise tell which classes of another assembly are meant to be saved.
+[`[TesseraUnion]`](../attributes/tessera-union.md) lists the allowed classes explicitly instead.
 
-A type is a model of every project that uses it, so two projects can write the same type. Their serializers are
-generated separately from the same model; as long as both see the same member defaults (see above), they write the
-same buffers, and either project's header reads them.
+## One class, saved by two projects
+
+Two projects can save the same class. Each generates its own serializer, from the same class; as long as both see the
+same default values (above), they write the same bytes, and either project's header reads them.
 
 Next: [MSBuild settings](msbuild.md).

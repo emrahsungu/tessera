@@ -1,16 +1,18 @@
-# TESSERA008: C++ type name adjusted
+# TESSERA008: A C++ class was renamed to avoid a clash
 
 **Info.** `C++ type for 'Game.Ui.Button' was renamed to 'Button_2' because another type in the same C++ namespace has
 that name`
 
-Two model types map to one C++ name in one C++ namespace. That happens when two C# namespaces map to the same C++
-namespace, most often because `TesseraCppNamespace` puts every type of the assembly into one namespace, and two
-classes in different C# namespaces share a name.
+**What it means:** two of your classes would get the same C++ class name in the same C++ namespace, so the generator
+added a number to one. This happens when two C# namespaces map to one C++ namespace, usually because
+`TesseraCppNamespace` puts every class of the project into one namespace, and two classes in different C# namespaces
+have the same name.
 
 ## Fix
 
-Nothing is wrong: the buffers are the same either way. To choose the C++ names yourself, rename one of the C# types, or
-remove `TesseraCppNamespace` so each C# namespace keeps its own C++ namespace ([MSBuild settings](../guide/msbuild.md)).
+Nothing is wrong: the saved data is the same either way. To choose the C++ names yourself, rename one of the C#
+classes, or remove `TesseraCppNamespace`, so each C# namespace keeps its own C++ namespace
+([MSBuild settings](../guide/msbuild.md)).
 
-Renaming a class that is a union member changes its tag; keep the old tag with
-[`[Tessera("OldName")]`](../attributes/tessera.md).
+If the class is stored in fields declared as a base class or interface, renaming it changes its type ID in saved
+data; keep the old name with [`[Tessera("OldName")]`](../attributes/tessera.md).

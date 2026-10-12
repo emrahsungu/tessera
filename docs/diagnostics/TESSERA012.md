@@ -1,25 +1,24 @@
-# TESSERA012: Model is not marked
+# TESSERA012: Strict mode: a saved class isn't marked
 
 **Error.** `'Weapon' is a model but has no [Tessera] and is not listed in [assembly: TesseraRoot];
 TesseraRequireAttribute requires every model class, record and struct to be marked`
 
-The project turned on strict mode (`<TesseraRequireAttribute>true</TesseraRequireAttribute>`), which requires every
-model to be declared, so that no type joins the wire format unannounced. This type became a model without a mark:
-something serializes it, or a model uses it.
+**What it means:** the project turned on strict mode (`<TesseraRequireAttribute>true</TesseraRequireAttribute>`),
+which requires every class that gets saved to be marked, so that nothing enters your saved data unannounced. This
+class would be saved, because your code saves it or uses it as a field type, but it isn't marked.
 
 ## Fix
 
-Mark it, if it belongs in the wire format:
+If it belongs in your saved data, mark it:
 
 ```csharp
 [Tessera]
 public class Weapon { ... }
 ```
 
-or list it in [`[assembly: TesseraRoot(typeof(Weapon))]`](../attributes/tessera-root.md). If it should not be in the
-wire format, remove the member that uses it, or leave that member out with
-[`[TesseraIgnore]`](../attributes/tessera-ignore.md).
+or list it in [`[assembly: TesseraRoot(typeof(Weapon))]`](../attributes/tessera-root.md). If it doesn't, remove the
+field that uses it, or leave that field out with [`[TesseraIgnore]`](../attributes/tessera-ignore.md).
 
-Enums, plain structs and abstract union bases need no mark.
+Enums, plain structs and abstract base classes need no mark.
 
-See also: [Strict mode](../guide/models.md#strict-mode).
+See also: [Strict mode](../guide/generated-types.md#strict-mode).

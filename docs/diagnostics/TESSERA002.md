@@ -1,16 +1,16 @@
-# TESSERA002: Duplicate wire name
+# TESSERA002: Two fields would be saved under the same name
 
 **Error.** `Members 'Hp' and 'HitPoints' of 'Monster' have the same wire name or name hash; give one of them a
 different [TesseraName]`
 
-Members are identified on the wire by a 64-bit hash of their wire name: the C# name, or the one given with
-[`[TesseraName]`](../attributes/tessera-name.md). Two members of one type ended up with the same name, usually because
-one was renamed with `[TesseraName]` to a name another member already has. (Two different names with the same 64-bit
-hash are possible in theory and reported the same way.)
+**What it means:** two fields of one class would be saved under the same name. Saved data identifies each field by a
+64-bit hash of its name: the C# name, or the one given with [`[TesseraName]`](../attributes/tessera-name.md). This
+usually happens when a field is renamed with `[TesseraName]` to a name another field already has. (Two different
+names with the same hash are possible in theory, and reported the same way.)
 
 ## Fix
 
-Give one of the members a different wire name:
+Give one of the fields a different saved name:
 
 ```csharp
 public class Monster
@@ -20,4 +20,4 @@ public class Monster
 }
 ```
 
-If buffers with the old name exist, keep the old name on the member that should read them.
+If data was already saved under the old name, keep that name on the field that should read it.

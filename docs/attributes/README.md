@@ -1,19 +1,19 @@
 # Attributes
 
-No attribute is required: plain classes, records and structs are models as they are
-([Which types are models](../guide/models.md)). Attributes change details, one each:
+You don't need any attribute: Tessera generates code for the classes you serialize, and for the types of their fields
+([Which types get generated code](../guide/generated-types.md)). Attributes change specific behavior:
 
 | Attribute | On | What it does |
 |---|---|---|
-| [`[Tessera]`](tessera.md), `[Tessera("Name")]` | class, record, struct | makes the type a model even when nothing serializes it; the name fixes its union tag |
-| [`[assembly: TesseraRoot(typeof(A), ...)]`](tessera-root.md) | assembly | makes types models without editing them |
-| [`[TesseraIgnore]`](tessera-ignore.md) | field, property | leaves the member out (so do `[IgnoreDataMember]` and `[NonSerialized]`) |
-| [`[TesseraName("wire")]`](tessera-name.md) | field, property | the member's wire name: rename it in C# without breaking buffers |
-| [`[DefaultValue(x)]`](default-value.md), or an initializer | field, property | the default: not stored, and returned by C++ when absent |
-| [`[TesseraKeepDefault]`](tessera-keep-default.md) | field, property | always stores the member; scalars, enums and plain structs then sit at a fixed position |
-| [`[TesseraShared]`](tessera-shared.md) | struct, field, property | stores a struct behind an offset, so equal values are stored once with `Sharing.All` |
-| [`[TesseraUnion(typeof(A), ...)]`](tessera-union.md) | class, interface, field, property | the concrete types a union member may hold |
+| [`[Tessera]`](tessera.md) | class, record, struct | Generates the serializer and the C++ header for the type even if no code serializes it directly, for example a type only C++ reads. |
+| [`[Tessera("Name")]`](tessera.md) | class, record, struct | The same, and sets the name stored in the buffer to identify this class when a field is declared as its base class or interface. Lets you rename the class without breaking saved data. |
+| [`[assembly: TesseraRoot(typeof(A), ...)]`](tessera-root.md) | assembly | Same as `[Tessera]`, for types you list in one place instead of annotating them: types from other projects, or types your code only serializes through a generic method. |
+| [`[TesseraIgnore]`](tessera-ignore.md) | field, property | Does not save the field. (`[IgnoreDataMember]` and `[NonSerialized]` work too.) |
+| [`[TesseraName("OldName")]`](tessera-name.md) | field, property | Saves the field under another name. Lets you rename a field in C# while data saved with the old name still loads. |
+| [`[DefaultValue(x)]`](default-value.md), or an initializer (`= 100`) | field, property | The field's default value. A field equal to its default is not written to the buffer, and C++ returns the default when the field is missing. |
+| [`[TesseraKeepDefault]`](tessera-keep-default.md) | field, property | Always writes the field, even when it equals its default. Number, enum and plain-struct fields are then stored at a fixed position, so C++ reads them with a single memory load. |
+| [`[TesseraShared]`](tessera-shared.md) | struct, field, property | Stores the struct value separately, with a reference to it in the object, so equal values are stored only once when writing with `Sharing.All`. |
+| [`[TesseraUnion(typeof(A), ...)]`](tessera-union.md) | class, interface, field, property | Lists which derived classes a field declared as a base class or interface may hold. Without it, every derived class in the project is allowed. |
 
-The source generator also emits three attributes into your assembly: `[assembly: TesseraDefault]`,
-`[assembly: TesseraDeclared]` and `[assembly: TesseraCppHeader]`. You never write them; [Generated
-attributes](generated.md) explains what they carry.
+The source generator also adds three attributes to your compiled assembly, which you never write yourself:
+[generated attributes](generated.md).

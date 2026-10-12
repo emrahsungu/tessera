@@ -1,13 +1,14 @@
-# TESSERA009: Union tag is zero
+# TESSERA009: A class name hashes to the reserved type ID 0
 
 **Error.** `Type 'Rune' hashes to union tag 0, which means 'no value'; give it a different [Tessera("name")]`
 
-A union member's tag is a 32-bit hash of its type name. Tag 0 is reserved: it marks a union member that is null. One
-type's name happens to hash to 0 (about one name in four billion).
+**What it means:** in a field declared as a base class or interface, saved data records which derived class each value
+is with a 32-bit ID: a hash of the class name. The ID 0 is reserved for a null value, and this class's name happens to
+hash to 0 (about one name in four billion).
 
 ## Fix
 
-Give the type another stable name, which changes only its tag:
+Give the class another saved name; it changes only its ID:
 
 ```csharp
 [Tessera("RuneItem")]

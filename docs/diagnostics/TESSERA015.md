@@ -5,22 +5,21 @@ generated and Serialize will throw. The generator runs only as an analyzer, whic
 on. Replace the reference with <Import Project="../../src/Tessera.ProjectReference.targets" /> at the end of the
 project file (as samples/Quickstart does), or reference the Tessera package.`
 
-A project inside the Tessera repository has a `<ProjectReference>` to `src/Tessera/Tessera.csproj`, and no reference
-to the source generator. It compiles, because the attributes and `TesseraSerializer` are in `src/Tessera`, but the
-generator that writes every model's serializer runs only when it is referenced as an analyzer, and analyzers do not
-flow through project references. Without it, `TesseraSerializer.Serialize` throws `TesseraException` at run time:
-no writer was generated.
+**What it means:** a project inside the Tessera repository references `src/Tessera/Tessera.csproj`, but not the
+source generator. It compiles, because the attributes and `TesseraSerializer` are in `src/Tessera`. But the C#
+compiler only runs a source generator referenced **as an analyzer**, and a project reference doesn't pass analyzers
+on. So no serializers are generated, and `TesseraSerializer.Serialize` throws a `TesseraException` at run time.
 
-The check lives in the repository's `Directory.Build.targets`, so it runs only for projects inside the repository's
-folder. A project elsewhere gets the run-time exception, whose message names the same fix.
+The check is in the repository's `Directory.Build.targets`, so it only runs for projects inside the repository's
+folder. Elsewhere you get the run-time exception, whose message names the same fix.
 
 ## Fix
 
-Replace the project reference with the import the message names (its path is relative to your project):
+Replace the project reference with the line from the message (its path is relative to your project):
 
 ```xml
 <Import Project="../../src/Tessera.ProjectReference.targets" />
 ```
 
-It adds the runtime, the generator as an analyzer, and the header export, exactly like the package. Or reference the
-Tessera package. See [Installation](../guide/installation.md#b-this-repositorys-projects-in-your-solution).
+It adds the library, the generator as an analyzer, and the C++ header export, exactly like the package. Or reference
+the Tessera package. See [Installation](../guide/installation.md#b-this-repositorys-projects-in-your-solution).

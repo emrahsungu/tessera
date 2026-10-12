@@ -1,14 +1,16 @@
-# TESSERA004: Union tag collision
+# TESSERA004: Two derived classes would get the same type ID
 
 **Error.** `Types 'Game.Items.Key' and 'Game.Doors.Key' in union 'Item' have the same type id; give one of them a
 different [Tessera("name")]`
 
-Each type in a union is told apart by its tag: a 32-bit hash of its type name, without the namespace. Two types in one
-union have the same name in different namespaces (or, rarely, two names have the same hash).
+**What it means:** a field declared as a base class or interface can hold several derived classes, so saved data
+records which class each value is, with a 32-bit ID: a hash of the class name, without its namespace. Two of the
+derived classes have the same name in different namespaces (or, rarely, two names have the same hash), so they would
+get the same ID.
 
 ## Fix
 
-Give one of them a different stable name:
+Give one of them a different saved name:
 
 ```csharp
 namespace Game.Doors;
@@ -17,7 +19,8 @@ namespace Game.Doors;
 public sealed class Key : Item { ... }
 ```
 
-The name only changes the tag. If buffers already hold values of that type, give the new name to the type that did not
-exist when they were written, so the existing tag stays with the existing type.
+The name only changes the ID. If data has already been saved, rename the class that didn't exist back then, so the
+existing ID stays with the existing class.
 
-See also: [`[Tessera]`](../attributes/tessera.md), [Unions](../guide/types.md#unions).
+See also: [`[Tessera]`](../attributes/tessera.md),
+[Fields declared as a base class or interface](../guide/supported-types.md#fields-declared-as-a-base-class-or-interface).
