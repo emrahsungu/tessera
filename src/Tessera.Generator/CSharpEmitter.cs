@@ -176,10 +176,9 @@ namespace Tessera.Generator
             }
 
             // 2. Presence. Fields and plain properties are read where they are; other getters run once, into a local.
-            // Nothing from here on branches on whether a member is set: in sparse data that is unpredictable, and a
-            // mispredicted branch costs more than the arithmetic that replaces it.
+            bool branchFree = o.Cells.Count + o.Bools.Count > MaxBranchyMembers;
             bool anyDefaults = LayoutBuilder.WireOrder(o).Any(UsesWriteDefaults);
-            if (anyDefaults) _w.Line("uint wd = 0u - TesseraWriter.Bit(w.WriteDefaults);   // all ones when values equal to their default are written too");
+            if (anyDefaults) _w.Line(branchFree ? "uint wd = 0u - TesseraWriter.Bit(w.WriteDefaults);   // all ones when values equal to their default are written too" : "bool wd = w.WriteDefaults;");
             foreach (var m in LayoutBuilder.WireOrder(o))
             {
                 if (!WireFormat.IsReference(m.Value.Kind) && !m.ReadInPlace) _w.Line($"var s{Id(m)} = v.{m.CsName};");
@@ -187,28 +186,49 @@ namespace Tessera.Generator
 
             int words = o.HeaderWords;
             for (int i = 0; i < words; i++) _w.Line($"uint h{i} = 0;");
-            foreach (var m in o.Cells) _w.Line($"h{m.Bit / 32} |= {Shift($"TesseraWriter.Bit({Present(m)})", m.Bit % 32)};");
-            foreach (var m in o.Bools) _w.Line($"h{m.Bit / 32} |= {Shift(BoolBits(m), m.Bit % 32)};");   // a pair never straddles two words
-            if (anyDefaults)
+            if (branchFree)
             {
-                // WriteDefaults: every member that is left out when it equals its default is present. One mask per word
-                // instead of a test per member.
-                var masks = BitMasks(LayoutBuilder.WireOrder(o).Where(UsesWriteDefaults), words);
-                for (int i = 0; i < words; i++)
+                foreach (var m in o.Cells) _w.Line($"h{m.Bit / 32} |= {Shift($"TesseraWriter.Bit({Present(m)})", m.Bit % 32)};");
+                foreach (var m in o.Bools) _w.Line($"h{m.Bit / 32} |= {Shift(BoolBits(m), m.Bit % 32)};");   // a pair never straddles two words
+                if (anyDefaults)
                 {
-                    if (masks[i] != 0) _w.Line($"h{i} |= wd & 0x{masks[i]:X}u;");
+                    // WriteDefaults: every member that is left out when it equals its default is present. One mask per
+                    // word instead of a test per member.
+                    var masks = BitMasks(LayoutBuilder.WireOrder(o).Where(UsesWriteDefaults), words);
+                    for (int i = 0; i < words; i++)
+                    {
+                        if (masks[i] != 0) _w.Line($"h{i} |= wd & 0x{masks[i]:X}u;");
+                    }
+                }
+
+                // The cells' bytes: per cell size, the number of present cells of that size.
+                var cellTerms = new List<string>();
+                foreach (var g in o.Cells.GroupBy(m => m.CellSize).OrderBy(g => g.Key))
+                {
+                    string count = BitCount(g, words);
+                    cellTerms.Add(g.Key == 1 ? count : $"{g.Key} * {count}");
+                }
+
+                _w.Line(cellTerms.Count == 0 ? "int cells = 0;" : $"int cells = {string.Join(" + ", cellTerms)};");
+            }
+            else
+            {
+                _w.Line("int cells = 0;");
+                foreach (var m in o.Cells)
+                {
+                    string present = UsesWriteDefaults(m) ? $"wd || {Present(m)}" : Present(m);
+                    _w.Line($"if ({present}) {{ h{m.Bit / 32} |= 0x{1u << (m.Bit % 32):X}u; cells += {m.CellSize}; }}");
+                }
+
+                foreach (var m in o.Bools)
+                {
+                    string x = Val(m);
+                    string val = m.Value.IsNullableValueType ? $"{x}.GetValueOrDefault()" : x;
+                    string present = m.Value.IsNullableValueType ? $"{x}.HasValue" : m.KeepDefault ? "true" : $"wd || {x} != {BoolLiteral(m)}";
+                    int pb = m.Bit, vb = m.Bit + 1;
+                    _w.Line($"if ({present}) {{ h{pb / 32} |= 0x{1u << (pb % 32):X}u; if ({val}) h{vb / 32} |= 0x{1u << (vb % 32):X}u; }}");
                 }
             }
-
-            // The cells' bytes: per cell size, the number of present cells of that size.
-            var cellTerms = new List<string>();
-            foreach (var g in o.Cells.GroupBy(m => m.CellSize).OrderBy(g => g.Key))
-            {
-                string count = BitCount(g, words);
-                cellTerms.Add(g.Key == 1 ? count : $"{g.Key} * {count}");
-            }
-
-            _w.Line(cellTerms.Count == 0 ? "int cells = 0;" : $"int cells = {string.Join(" + ", cellTerms)};");
 
             string align = "4";
             if (o.Fixed.Any(m => m.CellAlign == 8)) align = "8";
@@ -219,11 +239,89 @@ namespace Tessera.Generator
             _w.Line(o.FixedSize > 0 ? $"ref byte o = ref w.BeginObject(size, {o.FixedSize} + cells, {align});" : $"ref byte o = ref w.BeginObject(size, cells, {align});");
             _w.Line("int at = w.Position;");
 
-            // 3. Cells, the last one first, each stored just below the cells after it. Where each one goes follows from
-            // the header bits alone: an absent cell's value is stored too but not counted, so the next cell, or the
-            // header written afterwards, covers it (an absent first cell can reach up to 8 bytes in front of the
-            // object, into space the writer keeps free). A field that another thread changes in the meantime can
-            // change what is stored, never where.
+            // 3. Cells. Whether each one is stored is read from the header bits alone, so a field that another thread
+            // changes in the meantime can change what is stored, never where.
+            if (branchFree) EmitCellsBranchFree(o);
+            else EmitCellsInOrder(o, start);
+
+            // 4. The header and the fixed cells (over anything absent cells left there).
+            for (int i = 0; i < words; i++) _w.Line(i == 0 ? "Unsafe.WriteUnaligned(ref o, h0);" : $"Unsafe.WriteUnaligned(ref Unsafe.Add(ref o, {4 * i}), h{i});");
+            int fixedEnd = 0;
+            foreach (var m in o.Fixed)
+            {
+                string fixedAt = $"ref Unsafe.Add(ref o, {4 * words + m.FixedOffset})";
+                if (m.Value.Kind == WireKind.Struct) _w.Line($"Struct{m.Value.Struct!.Index}({fixedAt}, {InArg(m)});");
+                else _w.Line($"Unsafe.WriteUnaligned({fixedAt}, {ScalarCast(m.Value, Val(m))});");
+                fixedEnd = m.FixedOffset + m.CellSize;
+            }
+
+            if (o.FixedSize > fixedEnd) _w.Line($"Unsafe.InitBlockUnaligned(ref Unsafe.Add(ref o, {4 * words + fixedEnd}), 0, {o.FixedSize - fixedEnd});");
+
+            string refsArg = o.RefCellCount == 0 ? "default" : branchFree ? "refs.Slice(nr)" : "refs.Slice(0, nr)";
+            _w.Line($"int pos = w.EndObject(TesseraSchema.T{o.Index}, size, {refsArg});");
+            _w.Line("w.Exit();");
+            _w.Line("return pos;");
+            _w.Close();
+        }
+
+        /// <summary>
+        /// Objects with at most this many members (cells and bools) keep a branch per member; bigger ones are written
+        /// without one. A branch the CPU predicts costs nearly nothing and lets it go on before the member is even read,
+        /// which wins when the same members are set object after object, as in small, filled-in objects. The more
+        /// members, the likelier their presence varies, and a mispredicted branch then costs more than the arithmetic
+        /// that replaces it. Measured on the benchmark workloads: 5- and 8-member objects with predictable presence
+        /// were 6-11% slower without branches; objects of 9 to 40 members with varying presence were 12-48% faster.
+        /// </summary>
+        private const int MaxBranchyMembers = 8;
+
+        /// <summary>
+        /// Cells in order, each where the previous one ended, with a branch per cell on its header bit.
+        /// </summary>
+        private void EmitCellsInOrder(ObjectModel o, int start)
+        {
+            if (o.Cells.Count > 0) _w.Line($"int c = {start};");
+            if (o.RefCellCount > 0)
+            {
+                _w.Line($"Span<int> refs = stackalloc int[{o.RefCellCount}];");
+                _w.Line("int nr = 0;");
+            }
+
+            foreach (var m in o.Cells)
+            {
+                var v = m.Value;
+                string id = Id(m);
+                string present = $"(h{m.Bit / 32} & 0x{1u << (m.Bit % 32):X}u) != 0";
+                string at = "ref Unsafe.Add(ref o, c)";
+                switch (v.Kind)
+                {
+                    case WireKind.String:
+                    case WireKind.Vector:
+                    case WireKind.Object:
+                    case WireKind.SharedStruct:
+                        _w.Line($"if ({present}) {{ TesseraWriter.WriteOffset({at}, at - c, r{id}); refs[nr++] = c; c += 4; }}");
+                        break;
+                    case WireKind.Union:
+                        _w.Line($"if ({present}) {{ Unsafe.WriteUnaligned({at}, t{id}); TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, c + 4), at - c - 4, r{id}); refs[nr++] = c + 4; c += 8; }}");
+                        break;
+                    case WireKind.Struct:
+                        if (v.IsNullableValueType) _w.Line($"if ({present}) {{ var y = {Val(m)}.GetValueOrDefault(); Struct{v.Struct!.Index}({at}, in y); c += {m.CellSize}; }}");
+                        else _w.Line($"if ({present}) {{ Struct{v.Struct!.Index}({at}, {InArg(m)}); c += {m.CellSize}; }}");
+                        break;
+                    default:
+                        string expr = v.IsNullableValueType ? $"{Val(m)}.GetValueOrDefault()" : Val(m);
+                        _w.Line($"if ({present}) {{ Unsafe.WriteUnaligned({at}, {ScalarCast(v, expr)}); c += {m.CellSize}; }}");
+                        break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Cells without a branch, the last one first, each stored just below the cells after it: an absent cell's
+        /// value is stored too but not counted, so the next cell, or the header written afterwards, covers it (an
+        /// absent first cell can reach up to 8 bytes in front of the object, into space the writer keeps free).
+        /// </summary>
+        private void EmitCellsBranchFree(ObjectModel o)
+        {
             if (o.Cells.Count > 0) _w.Line("nint e = size;");
             if (o.RefCellCount > 0)
             {
@@ -260,25 +358,6 @@ namespace Tessera.Generator
                         break;
                 }
             }
-
-            // 4. The header and the fixed cells, over anything absent cells left there.
-            for (int i = 0; i < words; i++) _w.Line(i == 0 ? "Unsafe.WriteUnaligned(ref o, h0);" : $"Unsafe.WriteUnaligned(ref Unsafe.Add(ref o, {4 * i}), h{i});");
-            int fixedEnd = 0;
-            foreach (var m in o.Fixed)
-            {
-                string fixedAt = $"ref Unsafe.Add(ref o, {4 * words + m.FixedOffset})";
-                if (m.Value.Kind == WireKind.Struct) _w.Line($"Struct{m.Value.Struct!.Index}({fixedAt}, {InArg(m)});");
-                else _w.Line($"Unsafe.WriteUnaligned({fixedAt}, {ScalarCast(m.Value, Val(m))});");
-                fixedEnd = m.FixedOffset + m.CellSize;
-            }
-
-            if (o.FixedSize > fixedEnd) _w.Line($"Unsafe.InitBlockUnaligned(ref Unsafe.Add(ref o, {4 * words + fixedEnd}), 0, {o.FixedSize - fixedEnd});");
-
-            string refsArg = o.RefCellCount > 0 ? "refs.Slice(nr)" : "default";
-            _w.Line($"int pos = w.EndObject(TesseraSchema.T{o.Index}, size, {refsArg});");
-            _w.Line("w.Exit();");
-            _w.Line("return pos;");
-            _w.Close();
         }
 
         /// <summary>A dictionary: its entries sorted by key, then the values and keys vectors and a two-cell object.</summary>
