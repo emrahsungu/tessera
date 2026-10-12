@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using Microsoft.CodeAnalysis;
 
 namespace Tessera.Generator
 {
@@ -13,6 +14,7 @@ namespace Tessera.Generator
         private readonly string _ns;
         private readonly CodeWriter _w = new CodeWriter();
         private readonly Dictionary<string, string> _vectorHelpers = new Dictionary<string, string>();
+        private readonly Dictionary<string, string> _mapWriters = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly List<Action> _pendingHelpers = new List<Action>();
         private readonly List<string> _accessors = new List<string>();
 
@@ -166,7 +168,7 @@ namespace Tessera.Generator
         {
             if (o.Map != null)
             {
-                EmitMap(o);
+                EmitMap(o, "Write" + o.Index, o.Map.Value);
                 return;
             }
 
@@ -199,7 +201,8 @@ namespace Tessera.Generator
                         }
                         else
                         {
-                            _w.Line($"{{ var x = v.{m.CsName}; if (x is not null) r{id} = Write{v.Object.Index}(w, x); }}");
+                            string write = v.Object.Map != null ? MapWriter(v) : "Write" + v.Object.Index;
+                            _w.Line($"{{ var x = v.{m.CsName}; if (x is not null) r{id} = {write}(w, x); }}");
                         }
 
                         break;
@@ -425,25 +428,70 @@ namespace Tessera.Generator
             }
         }
 
-        /// <summary>A dictionary: its entries sorted by key, then the values and keys vectors and a two-cell object.</summary>
-        private void EmitMap(ObjectModel o)
+        /// <summary>
+        /// The writer of a dictionary declared as <paramref name="value"/>'s C# type. Dictionaries of one stored type share
+        /// a model, with the C# types of the first one seen; values that are lists or dictionaries of other C# types
+        /// (int[] and List&lt;int&gt; are stored alike) need a writer of their own.
+        /// </summary>
+        private string MapWriter(ValueModel value)
+        {
+            var o = value.Object!;
+            var element = o.Map!.Value;
+            bool collection = element.Kind == WireKind.Vector || (element.Kind == WireKind.Object && element.Object!.Map != null);
+            if (collection && value.Type is INamedTypeSymbol named)
+            {
+                foreach (var i in new[] { named }.Concat(named.AllInterfaces))
+                {
+                    string def = i.OriginalDefinition.ToDisplayString();
+                    if (def != "System.Collections.Generic.IDictionary<TKey, TValue>" && def != "System.Collections.Generic.IReadOnlyDictionary<TKey, TValue>") continue;
+                    element = element.Retyped(i.TypeArguments[1]);
+                    break;
+                }
+            }
+
+            if (element == o.Map.Value) return "Write" + o.Index;
+            string key = o.Index + "|" + element.CsTypeWithNullable();
+            if (_mapWriters.TryGetValue(key, out var name)) return name;
+            name = "Write" + o.Index + "_" + _mapWriters.Count;
+            _mapWriters[key] = name;
+            string writer = name;
+            _pendingHelpers.Add(() => EmitMap(o, writer, element));
+            return name;
+        }
+
+        /// <summary>
+        /// A dictionary whose values are <paramref name="element"/>: its entries sorted by key, then the values and keys
+        /// vectors and a two-cell object.
+        /// </summary>
+        private void EmitMap(ObjectModel o, string name, ValueModel element)
         {
             var map = o.Map!;
-            string kvp = "global::System.Collections.Generic.KeyValuePair<" + map.CsKeyType + ", " + map.CsValueType + ">";
+            string valueType = element.CsTypeWithNullable();
+            string kvp = "global::System.Collections.Generic.KeyValuePair<" + map.CsKeyType + ", " + valueType + ">";
             string keyPool = "global::System.Buffers.ArrayPool<" + map.CsKeyType + ">.Shared";
-            string valuePool = "global::System.Buffers.ArrayPool<" + map.CsValueType + ">.Shared";
+            string valuePool = "global::System.Buffers.ArrayPool<" + valueType + ">.Shared";
             var keys = o.Members.Single(m => m.WireName == "Keys");
             var values = o.Members.Single(m => m.WireName == "Values");
+            var valuesSpan = new ValueModel
+            {
+                Kind = WireKind.Vector,
+                Vector = values.Value.Vector,
+                Shape = CollectionShape.Span,
+                CsType = "global::System.ReadOnlySpan<" + valueType + ">",
+                Type = values.Value.Type,
+                IsReferenceType = true,
+                Element = element,
+            };
             _w.Line();
             _w.Line($"/// <summary>Writes {Xml(o.DisplayName)}: keys ascending, values in key order.</summary>");
-            _w.Open($"public static int Write{o.Index}(TesseraWriter w, {o.CsName} v)");
+            _w.Open($"public static int {name}(TesseraWriter w, global::System.Collections.Generic.IEnumerable<{kvp}> v)");
             _w.Line("w.Enter();");
             _w.Line($"int n = v is global::System.Collections.Generic.ICollection<{kvp}> c ? c.Count : global::System.Linq.Enumerable.Count(v);");
             _w.Line($"{map.CsKeyType}[] keys = {keyPool}.Rent(n);");
-            _w.Line($"{map.CsValueType}[] values = {valuePool}.Rent(n);");
+            _w.Line($"{valueType}[] values = {valuePool}.Rent(n);");
             _w.Line("int count = 0;");
             // A Dictionary is enumerated with its own struct enumerator: no boxing, no interface calls per entry.
-            _w.Open($"if (v is global::System.Collections.Generic.Dictionary<{map.CsKeyType}, {map.CsValueType}> d)");
+            _w.Open($"if (v is global::System.Collections.Generic.Dictionary<{map.CsKeyType}, {valueType}> d)");
             _w.Open("foreach (var kv in d)");
             _w.Line("if (count == n) break;");
             _w.Line("keys[count] = kv.Key;");
@@ -457,7 +505,7 @@ namespace Tessera.Generator
             _w.Line("values[count++] = kv.Value;");
             _w.Close();
             _w.Close();
-            string writeValues = $"int rValues = {VectorHelper(values.Value)}(w, new global::System.ReadOnlySpan<{map.CsValueType}>(values, 0, count));";
+            string writeValues = $"int rValues = {VectorHelper(valuesSpan)}(w, new global::System.ReadOnlySpan<{valueType}>(values, 0, count));";
             if (map.Key.Kind == WireKind.String)
             {
                 // Strings by code point (the order of their UTF-8 bytes, which is how C++ compares them), checked while
@@ -726,7 +774,7 @@ namespace Tessera.Generator
 
         private void EmitVector(string name, ValueModel collection)
         {
-            var e = collection.Vector!.Element;
+            var e = collection.DeclaredElement();
             _w.Line();
             _w.Open($"public static int {name}(TesseraWriter w, {collection.CsType} v)");
             string count = collection.Shape == CollectionShape.Array || collection.Shape == CollectionShape.Span ? "v.Length" : "v.Count";
@@ -825,7 +873,7 @@ namespace Tessera.Generator
                         break;
                     case WireKind.Object:
                         if (e.Object!.IsValueType) _w.Line($"w.SetRef(slot + i, Write{e.Object.Index}(w, in x));");
-                        else _w.Line($"w.SetRef(slot + i, x is null ? 0 : Write{e.Object.Index}(w, x));");
+                        else _w.Line($"w.SetRef(slot + i, x is null ? 0 : {(e.Object.Map != null ? MapWriter(e) : "Write" + e.Object.Index)}(w, x));");
                         break;
                     case WireKind.Vector:
                         _w.Line($"w.SetRef(slot + i, x is null ? 0 : {VectorHelper(e)}(w, x));");
@@ -863,6 +911,7 @@ namespace Tessera.Generator
             CsType = "global::System.Collections.Generic.List<" + element.CsTypeWithNullable() + ">",
             Type = collection.Type,
             IsReferenceType = true,
+            Element = element,
         };
 
         // ------------------------------------------------------------------ registration

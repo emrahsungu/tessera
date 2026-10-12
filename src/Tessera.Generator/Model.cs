@@ -159,7 +159,51 @@ namespace Tessera.Generator
         public CollectionShape Shape;
         public UnionModel? Union;
 
+        /// <summary>
+        /// A list's element as declared here, when set: lists of one stored type share their element's model, which has
+        /// the C# type of the first list seen, so a list or dictionary element of another C# type (int[] or List&lt;int&gt;)
+        /// needs its own.
+        /// </summary>
+        public ValueModel? Element;
+
         public TypeModel? Entry => (TypeModel?)Struct ?? (TypeModel?)Object ?? (TypeModel?)Vector ?? Union;
+
+        /// <summary>
+        /// The element of this list as its C# type declares it. Lists of one stored type share their element's model,
+        /// which has the C# type of the first list seen: a list or dictionary element of another C# type (int[] and
+        /// List&lt;int&gt; are stored alike) gets a model of its own type.
+        /// </summary>
+        public ValueModel DeclaredElement()
+        {
+            if (Element != null) return Element;
+            var e = Vector!.Element;
+            bool collection = e.Kind == WireKind.Vector || (e.Kind == WireKind.Object && e.Object!.Map != null);
+            if (!collection || Shape == CollectionShape.Span) return e;
+            var declared = ModelBuilder.ElementType(Type, out _);
+            return declared == null ? e : e.Retyped(declared);
+        }
+
+        /// <summary>This value as another C# type that is stored alike (a list or dictionary declared otherwise).</summary>
+        public ValueModel Retyped(ITypeSymbol declared)
+        {
+            if (declared.IsReferenceType) declared = declared.WithNullableAnnotation(NullableAnnotation.NotAnnotated);
+            if (SymbolEqualityComparer.Default.Equals(Type, declared)) return this;
+            ModelBuilder.ElementType(declared, out var shape);
+            return new ValueModel
+            {
+                Kind = Kind,
+                Type = declared,
+                CsType = declared.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                IsNullableValueType = IsNullableValueType,
+                IsReferenceType = IsReferenceType,
+                Enum = Enum,
+                Struct = Struct,
+                Object = Object,
+                Vector = Vector,
+                Shape = shape,
+                Union = Union,
+            };
+        }
     }
 
     internal sealed class MemberModel

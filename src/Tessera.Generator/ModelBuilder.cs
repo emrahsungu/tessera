@@ -524,6 +524,19 @@ namespace Tessera.Generator
             }
         }
 
+        /// <summary>The element type of an array or collection type, and how it is enumerated; null for other types.</summary>
+        internal static ITypeSymbol? ElementType(ITypeSymbol type, out CollectionShape shape)
+        {
+            shape = CollectionShape.Enumerable;
+            if (type is IArrayTypeSymbol array)
+            {
+                shape = CollectionShape.Array;
+                return array.ElementType;
+            }
+
+            return type is INamedTypeSymbol named ? CollectionElement(named, out shape) : null;
+        }
+
         private static ITypeSymbol? CollectionElement(INamedTypeSymbol named, out CollectionShape shape)
         {
             shape = CollectionShape.Enumerable;
