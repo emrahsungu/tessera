@@ -91,11 +91,15 @@ public sealed partial class TesseraWriter
 
     // ------------------------------------------------------------------ space management
 
+    /// <summary>Free bytes always kept in front of the written data (see <see cref="Reserve"/>).</summary>
+    private const int ScratchBytes = 8;
+
     /// <summary>
     /// Reserves <paramref name="size"/> bytes in front of everything written so far. Padding is inserted so that the
     /// point <paramref name="alignAt"/> bytes before the end of the item lands on a multiple of
-    /// <paramref name="align"/> in the final buffer. Returns a reference to the first reserved byte; the item's
-    /// position is <see cref="Position"/> afterwards. The caller must write every reserved byte.
+    /// <paramref name="align"/> (1, 2, 4 or 8) in the final buffer. Returns a reference to the first reserved byte; the
+    /// item's position is <see cref="Position"/> afterwards. The caller must write every reserved byte. The 8 bytes in
+    /// front of the item stay free, and the caller may use them as scratch space.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref byte Reserve(int size, int align, int alignAt)
@@ -103,10 +107,12 @@ public sealed partial class TesseraWriter
         _savedPos = Position;
         int pad = (-(Position + alignAt)) & (align - 1);
         int need = pad + size;
-        if (_head < need) Grow(need);
+        if (_head < need + ScratchBytes) Grow(need + ScratchBytes);
         int start = _head - need;
         ref byte first = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_buf), start);
-        if (pad != 0) Unsafe.InitBlockUnaligned(ref Unsafe.Add(ref first, size), 0, (uint)pad);
+        // Zeroes the padding (at most 7 bytes) without a branch: the rest of the 8 bytes lands in the item, which the
+        // caller overwrites, or in the scratch space in front of it.
+        Unsafe.WriteUnaligned(ref Unsafe.Add(ref first, need - 8), 0UL);
         _head = start;
         return ref first;
     }
@@ -433,6 +439,10 @@ public sealed partial class TesseraWriter
     /// <summary>Returns the list's backing span without copying.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ReadOnlySpan<T> AsSpan<T>(List<T> list) => CollectionsMarshal.AsSpan(list);
+
+    /// <summary>1 for true and 0 for false, without a branch: generated writers build presence bits with it.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static uint Bit(bool value) => Unsafe.BitCast<bool, byte>(value);
 
     /// <summary>Little-endian helper for generated code.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
