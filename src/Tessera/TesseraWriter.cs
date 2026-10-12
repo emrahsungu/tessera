@@ -406,12 +406,10 @@ public sealed partial class TesseraWriter
     public ref byte BeginObject(int size, int cellBytes, int cellAlign) => ref Reserve(size, cellAlign < 4 ? 4 : cellAlign, cellBytes);
 
     /// <summary>
-    /// Completes an object started with <see cref="BeginObject"/>. <paramref name="refOffsets"/> lists the byte offsets
-    /// (from the object start, ascending) of every 4-byte offset slot it contains; they are needed for deduplication.
-    /// Returns the object's position (an earlier equal object's position when sharing is on).
+    /// Completes an object started with <see cref="BeginObject"/>. Returns the object's position (an earlier equal
+    /// object's position when <see cref="Sharing.All"/> is on).
     /// </summary>
-    public int EndObject(TesseraType type, int size, ReadOnlySpan<int> refOffsets) =>
-        _shareAll ? InternCanonical(Position, size, type.Id + 0x10000, refOffsets) : Position;
+    public int EndObject(TesseraType type, int size) => _shareAll ? InternObject(type, Position, size) : Position;
 
     /// <summary>Starts a shared (out-of-line) struct value; finish with <see cref="EndShared"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

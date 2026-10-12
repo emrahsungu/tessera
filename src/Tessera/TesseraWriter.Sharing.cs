@@ -194,6 +194,15 @@ public sealed partial class TesseraWriter
         return true;
     }
 
+    // Objects: where their offsets are follows from their header bits and their type's layout.
+    private int InternObject(TesseraType type, int pos, int size)
+    {
+        int max = type.MaxReferenceOffsets;
+        Span<int> offsets = max <= 64 ? stackalloc int[max] : new int[max];
+        int n = type.ReferenceOffsets(ItemSpan(pos, size), offsets);
+        return InternCanonical(pos, size, type.Id + 0x10000, offsets.Slice(0, n));
+    }
+
     // Items with inner offsets: canonical form replaces each offset by its absolute target position.
     private int InternCanonical(int pos, int size, int domain, ReadOnlySpan<int> refOffsets)
     {

@@ -257,8 +257,7 @@ namespace Tessera.Generator
 
             if (o.FixedSize > fixedEnd) _w.Line($"Unsafe.InitBlockUnaligned(ref Unsafe.Add(ref o, {4 * words + fixedEnd}), 0, {o.FixedSize - fixedEnd});");
 
-            string refsArg = o.RefCellCount == 0 ? "default" : branchFree ? "refs.Slice(nr)" : "refs.Slice(0, nr)";
-            _w.Line($"int pos = w.EndObject(TesseraSchema.T{o.Index}, size, {refsArg});");
+            _w.Line($"int pos = w.EndObject(TesseraSchema.T{o.Index}, size);");
             _w.Line("w.Exit();");
             _w.Line("return pos;");
             _w.Close();
@@ -280,11 +279,6 @@ namespace Tessera.Generator
         private void EmitCellsInOrder(ObjectModel o, int start)
         {
             if (o.Cells.Count > 0) _w.Line($"int c = {start};");
-            if (o.RefCellCount > 0)
-            {
-                _w.Line($"Span<int> refs = stackalloc int[{o.RefCellCount}];");
-                _w.Line("int nr = 0;");
-            }
 
             foreach (var m in o.Cells)
             {
@@ -298,10 +292,10 @@ namespace Tessera.Generator
                     case WireKind.Vector:
                     case WireKind.Object:
                     case WireKind.SharedStruct:
-                        _w.Line($"if ({present}) {{ TesseraWriter.WriteOffset({at}, at - c, r{id}); refs[nr++] = c; c += 4; }}");
+                        _w.Line($"if ({present}) {{ TesseraWriter.WriteOffset({at}, at - c, r{id}); c += 4; }}");
                         break;
                     case WireKind.Union:
-                        _w.Line($"if ({present}) {{ Unsafe.WriteUnaligned({at}, t{id}); TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, c + 4), at - c - 4, r{id}); refs[nr++] = c + 4; c += 8; }}");
+                        _w.Line($"if ({present}) {{ Unsafe.WriteUnaligned({at}, t{id}); TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, c + 4), at - c - 4, r{id}); c += 8; }}");
                         break;
                     case WireKind.Struct:
                         if (v.IsNullableValueType) _w.Line($"if ({present}) {{ var y = {Val(m)}.GetValueOrDefault(); Struct{v.Struct!.Index}({at}, in y); c += {m.CellSize}; }}");
@@ -323,28 +317,21 @@ namespace Tessera.Generator
         private void EmitCellsBranchFree(ObjectModel o)
         {
             if (o.Cells.Count > 0) _w.Line("nint e = size;");
-            if (o.RefCellCount > 0)
-            {
-                _w.Line($"Span<int> refs = stackalloc int[{o.RefCellCount}];");
-                _w.Line($"int nr = {o.RefCellCount};");
-            }
 
             foreach (var m in Enumerable.Reverse(o.Cells))
             {
                 var v = m.Value;
                 string id = Id(m);
-                string bit = $"(h{m.Bit / 32} >> {m.Bit % 32}) & 1u";
                 switch (v.Kind)
                 {
                     case WireKind.String:
                     case WireKind.Vector:
                     case WireKind.Object:
                     case WireKind.SharedStruct:
-                        // refs lists the present offsets from the top down, so it ends up ascending.
-                        _w.Line($"{{ nint x = e - 4; TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, x), at - (int)x, r{id}); refs[nr - 1] = (int)x; uint k = {bit}; nr -= (int)k; e -= (nint)(k << 2); }}");
+                        _w.Line($"{{ nint x = e - 4; TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, x), at - (int)x, r{id}); e -= {CellStep(m)}; }}");
                         break;
                     case WireKind.Union:
-                        _w.Line($"{{ nint x = e - 8; Unsafe.WriteUnaligned(ref Unsafe.Add(ref o, x), t{id}); TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, x + 4), at - (int)x - 4, r{id}); refs[nr - 1] = (int)x + 4; uint k = {bit}; nr -= (int)k; e -= (nint)(k << 3); }}");
+                        _w.Line($"{{ nint x = e - 8; Unsafe.WriteUnaligned(ref Unsafe.Add(ref o, x), t{id}); TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, x + 4), at - (int)x - 4, r{id}); e -= {CellStep(m)}; }}");
                         break;
                     case WireKind.Struct:
                         // Structs can be large: these are stored only when present.
@@ -415,16 +402,14 @@ namespace Tessera.Generator
             _w.Line("ref byte o = ref w.BeginObject(12, 8, 4);");
             _w.Line("int at = w.Position;");
             _w.Line($"Unsafe.WriteUnaligned(ref o, 0x{(1u << o.Cells[0].Bit) | (1u << o.Cells[1].Bit):X}u);");
-            _w.Line("Span<int> refs = stackalloc int[2];");
             for (int i = 0; i < 2; i++)
             {
                 int c = 4 + 4 * i;
                 string r = o.Cells[i].WireName == "Keys" ? "rKeys" : "rValues";
                 _w.Line($"TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, {c}), at - {c}, {r});");
-                _w.Line($"refs[{i}] = {c};");
             }
 
-            _w.Line($"int pos = w.EndObject(TesseraSchema.T{o.Index}, 12, refs);");
+            _w.Line($"int pos = w.EndObject(TesseraSchema.T{o.Index}, 12);");
             _w.Line("w.Exit();");
             _w.Line("return pos;");
             _w.Close();
