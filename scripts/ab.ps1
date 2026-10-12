@@ -32,8 +32,9 @@ function VsGenerator {
     return ($g -replace '^\* (Visual Studio \d+ \d{4}).*$', '$1')
 }
 $ab = Join-Path $root '.ab'
-# The two worktrees live outside the repository: BenchmarkDotNet finds a benchmark's project by searching the
-# repository for its file name, and stops when the worktrees put more copies of it there. One folder per clone.
+# BenchmarkDotNet rebuilds the benchmark project it finds by going up from the current directory to the solution
+# file, then searching below it for the project's file name. So each side's .NET run starts in its own worktree, and
+# the worktrees live outside the repository (a search that finds two copies stops). One folder per clone.
 $sha256 = [Security.Cryptography.SHA256]::Create()
 $cloneKey = [BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($root.ToLowerInvariant()))).Replace('-', '').Substring(0, 8)
 $trees = Join-Path ([IO.Path]::GetTempPath()) "tessera-ab-$cloneKey"
@@ -169,7 +170,11 @@ if (-not $ReportOnly) {
             }
             if (-not $NoDotnet) {
                 $proj = Join-Path $r 'benchmarks/Tessera.Benchmarks/Tessera.Benchmarks.csproj'
-                Run "$($s.Name) run $i (.NET write)" { dotnet run --project $proj -c Release --no-build -- --rounds $Rounds --round-ms ([Math]::Max(60, $RoundMs)) --warmup-ms 1000 @filterArgs 2>$null | Out-Null }
+                Run "$($s.Name) run $i (.NET write)" {
+                    Push-Location $r
+                    try { dotnet run --project $proj -c Release --no-build -- --rounds $Rounds --round-ms ([Math]::Max(60, $RoundMs)) --warmup-ms 1000 @filterArgs 2>$null | Out-Null }
+                    finally { Pop-Location }
+                }
                 Copy-Item (Join-Path $r 'benchmarks/results/dotnet.json') (Join-Path $results "dotnet-$($s.Name)-$i.json")
             }
         }

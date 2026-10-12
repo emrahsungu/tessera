@@ -84,6 +84,9 @@ var config = ManualConfig.CreateEmpty()
     .AddColumnProvider(DefaultColumnProviders.Instance)
     .AddLogger(new ProgressLogger())
     .WithArtifactsPath(Path.Combine(root, "benchmarks", "results", "bdn"));
+// BenchmarkDotNet rebuilds the project it finds from the current directory (up to the solution file, then down by the
+// project's file name): make that this checkout, whichever directory this program was started from.
+Directory.SetCurrentDirectory(root);
 Summary summary = BenchmarkRunner.Run<WriteBenchmarks>(config);
 
 var rows = new List<Dictionary<string, object>>();
