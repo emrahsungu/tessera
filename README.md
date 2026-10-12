@@ -12,6 +12,14 @@
   No IDL, no parsing, and no allocations on the read side.
 </p>
 
+<p align="center">
+  <a href="docs/README.md">Documentation</a> ·
+  <a href="docs/guide/installation.md">Installation</a> ·
+  <a href="docs/attributes/README.md">Attributes</a> ·
+  <a href="docs/diagnostics/README.md">Diagnostics</a> ·
+  <a href="docs/BENCHMARKS.md">Benchmarks</a>
+</p>
+
 ## 1. Example
 
 Your C# classes are the schema:
@@ -140,6 +148,10 @@ named after the assembly (`<AssemblyName>.tessera.hpp`) includes every model typ
 Buffers must start at an 8-byte aligned address, as memory from `new`, `malloc` or a `std::vector<std::uint64_t>` does.
 
 NuGet caches packages by version: after repacking the same version, delete `~/.nuget/packages/tessera`.
+
+To use this repository's projects in your solution instead of the package, see
+[Installation](docs/guide/installation.md#b-this-repositorys-projects-in-your-solution); the
+[documentation](docs/README.md) covers every attribute, option and diagnostic.
 
 ## 3. Why Tessera
 
@@ -611,7 +623,7 @@ sides as the noise control.
 | `tests` | .NET tests, generator tests, C++ interop, fuzz and UTF-8 tests |
 | `benchmarks` | the Tessera / FlatBuffers / MessagePack benchmark (C# writers, C++ readers) |
 | `samples/Quickstart` | the example at the top of this page, end to end |
-| `docs` | [wire format](docs/FORMAT.md), [benchmark results](docs/BENCHMARKS.md) and their raw data, the README's charts |
+| `docs` | the [documentation](docs/README.md): guide, attributes, diagnostics, [wire format](docs/FORMAT.md); [benchmark results](docs/BENCHMARKS.md) and their raw data, the README's charts |
 
 ## Third-party components
 
