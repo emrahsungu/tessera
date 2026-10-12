@@ -195,9 +195,10 @@ public static class Report
             string[] checkedColumns = deserializeColumns.Where(c => c.Title != "Tessera (unchecked)").Select(c => c.Title).ToArray();
             sb.AppendLine("## .NET read (µs per buffer, lower is better)");
             sb.AppendLine();
-            sb.AppendLine("Deserializing: a buffer (`byte[]`) to the objects it holds. Tessera checks the buffer, then creates the objects (`TesseraSerializer.Deserialize<T>`); \"Tessera (unchecked)\" skips the check (`TesseraReadOptions.Trusted`), as for data a program wrote itself. MemoryPack, MessagePack and both JSON libraries create the same classes; Protobuf parses into its own generated message classes, which a program then uses as they are. Every result is checked against the checksum of the objects it was written from before anything is timed. The fastest of the checked reads is in bold.");
+            sb.AppendLine("Deserializing: a buffer (`byte[]`) to the objects it holds. Tessera checks the buffer as it creates the objects (`TesseraSerializer.Deserialize<T>`); \"Tessera (unchecked)\" skips the check (`TesseraReadOptions.Trusted`), as for data a program wrote itself. MemoryPack, MessagePack and both JSON libraries create the same classes; Protobuf parses into its own generated message classes, which a program then uses as they are. Every result is checked against the checksum of the objects it was written from before anything is timed. The fastest of the checked reads is in bold.");
             sb.AppendLine();
-            sb.AppendLine("Measured with BenchmarkDotNet, as the .NET write: every case in a process of its own.");
+            string remeasured = DotnetReadNote(resultsDir);
+            sb.AppendLine("Measured with BenchmarkDotNet, as the .NET write: every case in a process of its own." + (remeasured.Length > 0 ? " " + remeasured : ""));
             sb.AppendLine();
             Table(sb, "Workload", deserializeColumns.Select(c => c.Title).ToArray(), workloads, (w, c) => Fmt(Col(deserializeColumns, w, c)),
                 (w, c) => Best(checkedColumns.Select(l => (l, Col(deserializeColumns, w, l))), c));
@@ -416,15 +417,25 @@ public static class Report
 
         // .NET read: deserializing against the others, reading in place against FlatBuffers (both unchecked).
         double ReadUs(string w, string lib, string op) => read.FirstOrDefault(x => x.Workload == w && x.Library == lib && x.Variant == op)?.Us ?? 0;
+        double ReadAlloc(string w, string lib, string op) => read.FirstOrDefault(x => x.Workload == w && x.Library == lib && x.Variant == op)?.Alloc ?? 0;
         foreach (string other in new[] { "MemoryPack", "MessagePack", "Protobuf", "System.Text.Json", "Newtonsoft.Json" })
         {
-            var slow = workloads.Select(w => (w, Ratio: ReadUs(w, "Tessera", "deserialize") / ReadUs(w, other, DeserializeOp(other))))
+            string op = DeserializeOp(other);
+            var slow = workloads.Select(w => (w, Ratio: ReadUs(w, "Tessera", "deserialize") / ReadUs(w, other, op)))
                 .Where(x => x.Ratio > 1 && !double.IsInfinity(x.Ratio) && !double.IsNaN(x.Ratio)).ToList();
             if (slow.Count == 0) continue;
-            string why = other == "MemoryPack"
-                ? " Tessera's time includes its check of the buffer, which MemoryPack does as it reads; without the check (unchecked), see the table. MemoryPack stores strings as UTF-16 by default, so its strings are a copy; Tessera's are UTF-8, decoded."
-                : "";
-            lines.Add($"**.NET deserialize** ({other} faster): {string.Join(", ", slow.Select(x => $"{x.w} {X(x.Ratio)}"))}.{why}");
+            // Why, per workload, from the results: the check of the buffer, or the same work on both sides.
+            var why = new List<string>();
+            foreach (var (w, _) in slow)
+            {
+                double unchecked_ = ReadUs(w, "Tessera", "deserialize, unchecked"), theirs = ReadUs(w, other, op);
+                double alloc = ReadAlloc(w, "Tessera", "deserialize");
+                if (unchecked_ > 0 && unchecked_ < theirs) why.Add($"on {w}, the check of the buffer makes the difference (without it, {Fmt(unchecked_)} µs against {Fmt(theirs)})");
+                else if (alloc > 0 && alloc == ReadAlloc(w, other, op)) why.Add($"on {w}, both create the same objects ({alloc.ToString("N0", CultureInfo.InvariantCulture)} bytes allocated) and copy the same values");
+            }
+
+            string because = why.Count == 0 ? "" : " " + char.ToUpperInvariant(why[0][0]) + string.Join("; ", why)[1..] + ".";
+            lines.Add($"**.NET deserialize** ({other} faster): {string.Join(", ", slow.Select(x => $"{x.w} {X(x.Ratio)}"))}.{because}");
         }
 
         var slowPlace = workloads.Select(w => (w, Ratio: ReadUs(w, "Tessera", "traversal") / ReadUs(w, "FlatBuffers", "traversal")))
@@ -448,6 +459,17 @@ public static class Report
         }
 
         return lines;
+    }
+
+    /// <summary>The note of dotnet-read.json on cases measured again (a run disturbed by other work on the machine), as a sentence.</summary>
+    private static string DotnetReadNote(string resultsDir)
+    {
+        string path = Path.Combine(resultsDir, "dotnet-read.json");
+        if (!File.Exists(path)) return "";
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        return doc.RootElement.GetProperty("settings").TryGetProperty("remeasured", out var note) && note.GetString() is { Length: > 0 } text
+            ? char.ToUpperInvariant(text[0]) + text[1..] + "."
+            : "";
     }
 
     /// <summary>The .NET reads in benchmarks/results/dotnet-read.json (operation in Variant), or none.</summary>

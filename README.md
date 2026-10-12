@@ -8,7 +8,7 @@
 <h1 align="center">Tessera</h1>
 
 <p align="center">
-  Binary buffers from plain .NET objects, read in place by C++20.<br>
+  Binary buffers from plain .NET objects, read in place by C++20 and .NET.<br>
   No IDL, no parsing, and no allocations on the read side.
 </p>
 
@@ -109,6 +109,29 @@ example, including loading the file, is in [samples/Quickstart](samples/Quicksta
 in `std::optional`: if a monster's `Weapons` was null, `weapons()` is simply empty, and converts to `false`
 ([Missing values](docs/guide/supported-types.md#missing-values-stdoptional-only-for-value-types)).
 
+.NET reads the buffer in place too, through a read type generated for each class (`MonsterView` for `Monster`), or
+creates the objects again:
+
+```csharp
+MonsterView view = MonsterView.Read(buffer);   // checks the buffer once; copies nothing
+Vec3 p = view.Position;
+Console.WriteLine($"{view.Name}: hp {view.Hp}, mana {view.Mana}, position {p.X} {p.Y} {p.Z}");
+foreach (WeaponView w in view.Weapons) Console.WriteLine($"  {w.Name}: damage {w.Damage}");
+
+Monster copy = TesseraSerializer.Deserialize<Monster>(buffer);
+Console.WriteLine($"{copy.Name} again, with {copy.Weapons!.Count} weapons");
+```
+
+```text
+Orc: hp 100, mana 25, position 1 2 3
+  Axe: damage 9
+  Bow: damage 4
+Orc again, with 2 weapons
+```
+
+A view reads each field from the buffer when you ask for it, so keep the buffer unchanged while you use it;
+`Deserialize` creates ordinary objects that no longer need the buffer ([Reading in .NET](docs/guide/reading-dotnet.md)).
+
 ### What the 328 bytes hold
 
 | Part | Bytes | Contents |
@@ -165,17 +188,20 @@ C++ engine. Both sides are generated from the same C# source, so they cannot dri
 - **Your classes are the schema.** No separate schema file and no required attributes: classes, records, structs,
   enums, nullable values, lists, dictionaries, and fields declared as an abstract class or interface, which can hold
   any derived class. Types that can't be saved are reported at compile time, with a suggested replacement.
-- **No parsing.** C++ validates a buffer once; after that, every field read is a plain memory load: nothing is parsed,
-  copied or allocated.
+- **No parsing.** C++ and .NET validate a buffer once; after that, every field read is a plain memory load: nothing
+  is parsed, copied or allocated. .NET can also create your objects again from it.
 - **Readable C++.** One header per class, `std::optional` for nullable fields, `std::string_view` for strings,
   `enum class` with your names, and `const S&` straight into the buffer for plain structs.
 - **Fast.** Saving is 9.4× faster than FlatBuffers, 3.3× faster than MessagePack-CSharp and 6.3× faster than
   Google.Protobuf, with no memory allocated besides the result (none at all with a reused writer). Validating a buffer
   is 2.7–4.0× faster than FlatBuffers' verifier; validating and then reading every field is 1.6–1.9× faster than with
   FlatBuffers, and 4–18× faster than with MessagePack, Protocol Buffers or JSON, which must parse first. Geometric
-  means over the benchmark workloads (per compiler for C++). MemoryPack, a .NET-only format that can only be read from
-  the start, saves about as fast: Tessera is faster on four of the nine workloads, MemoryPack on five, by up to 1.5×
-  where many strings are written; see [Performance](#4-performance).
+  means over the benchmark workloads (per compiler for C++). In .NET, creating the objects again, with the buffer
+  checked, is 4.6× faster than MessagePack-CSharp, 4.2× faster than Google.Protobuf's parse, 22× faster than
+  System.Text.Json and 1.14× faster than MemoryPack, and reading every field in place is 5.9× faster than with
+  FlatBuffers. MemoryPack, a .NET-only format that can only be read from the start, saves about as fast: Tessera is
+  faster on four of the nine workloads, MemoryPack on five, by up to 1.5× where many strings are written; see
+  [Performance](#4-performance).
 - **Compact.** Fields that are null or equal to their default take no space, and equal strings are stored once:
   buffers are up to 70% smaller than FlatBuffers' (1.3× on the geometric mean). MessagePack and Protocol Buffers,
   which store small integers in fewer bytes, are about 10% smaller.
@@ -190,13 +216,13 @@ C++ engine. Both sides are generated from the same C# source, so they cannot dri
 Environment: Intel Core i7-6700K, Windows 10, .NET 10.0.12. C++ with clang-cl 19.1, MSVC 19.42 and GCC 15.2 (in WSL),
 each compiler with the same flags for every library (optimized, AVX2). Tessera is compared with:
 
-| Format | .NET writer | C++ reader |
-|---|---|---|
-| FlatBuffers 25.12.19 | FlatBuffers' builder, from the same objects | FlatBuffers |
-| MessagePack | MessagePack-CSharp 3.1.10 | msgpack-cxx 9.0.0 |
-| Protocol Buffers | Google.Protobuf 3.36.2, whose generated classes the objects are converted to on every save | libprotobuf 36.2 |
-| JSON | System.Text.Json (source-generated) and Newtonsoft.Json 13.0.4 | simdjson 5.0.3 |
-| MemoryPack | MemoryPack 1.21.4 | none: MemoryPack is .NET only, so it counts for saving and size |
+| Format | .NET writer | .NET reader | C++ reader |
+|---|---|---|---|
+| FlatBuffers 25.12.19 | FlatBuffers' builder, from the same objects | its generated accessors, without its verifier (which cannot check buffers over 32 KB) | FlatBuffers |
+| MessagePack | MessagePack-CSharp 3.1.10 | the same, into the same classes | msgpack-cxx 9.0.0 |
+| Protocol Buffers | Google.Protobuf 3.36.2, whose generated classes the objects are converted to on every save | the same, into its generated classes | libprotobuf 36.2 |
+| JSON | System.Text.Json (source-generated) and Newtonsoft.Json 13.0.4 | the same, into the same classes | simdjson 5.0.3 |
+| MemoryPack | MemoryPack 1.21.4 | the same, into the same classes | none: MemoryPack is .NET only |
 
 There are nine workloads: a UI prefab (400 objects with polymorphic components), a game world (1,000 monsters),
 2,000 sparse records (40 optional fields each), a 20,000-sample time series, three scene graphs of 1,024 nodes (dense,
@@ -205,17 +231,22 @@ the common JSON benchmarks: one GeoJSON polygon of 480 rings and 55,563 points. 
 objects, and every C++ reader computes a checksum over every field, which must match the C# objects before anything
 is timed.
 
-Saving in .NET is timed with BenchmarkDotNet, every case in three processes of its own; C++ reads are medians of
-interleaved rounds. Tessera and FlatBuffers read a buffer where it lies. MessagePack, Protocol Buffers and JSON must
-parse it first, so for them, reading includes parsing; each parser runs its fastest way, measured, reusing its memory
-from one parse to the next. [docs/BENCHMARKS.md](docs/BENCHMARKS.md) has every table and the details.
+Saving and reading in .NET are timed with BenchmarkDotNet, every case in three processes of its own; C++ reads are
+medians of interleaved rounds. Tessera and FlatBuffers read a buffer where it lies. MessagePack, Protocol Buffers and
+JSON must parse it first, so for them, reading includes parsing; each parser runs its fastest way, measured, reusing its
+memory from one parse to the next. [docs/BENCHMARKS.md](docs/BENCHMARKS.md) has every table and the details.
 
 How many times faster (or smaller) Tessera is, as the geometric mean over the nine workloads, with the range per
-workload in parentheses. A safe read validates the buffer, then reads every field.
+workload in parentheses. A safe read validates the buffer, then reads every field. In .NET, "deserialize" creates the
+objects again (checked: Tessera's `Deserialize`, and the other libraries' deserializers; Protocol Buffers' parse creates
+its own generated classes), and "read in place" reads every field without creating objects, unchecked for both
+libraries.
 
 | | vs FlatBuffers | vs MessagePack | vs Protocol Buffers | vs JSON | vs MemoryPack |
 |---|---:|---:|---:|---:|---:|
 | .NET write | 9.41× (1.65–100) | 3.32× (1.30–10.8) | 6.32× (3.36–27.8) | 20.6× (7.57–206) | 0.99× (0.65–1.60) |
+| .NET deserialize | | 4.55× (1.88–13.9) | 4.20× (2.51–18.6) | 22.1× (7.48–173) | 1.14× (0.99–1.44) |
+| .NET read in place | 5.94× (4.70–10.2) | | | | |
 | Size | 1.27× (1.00–3.37) | 0.90× (0.59–2.01) | 0.92× (0.65–1.42) | 2.15× (1.30–3.04) | 1.28× (0.87–8.48) |
 | Safe read, Clang | 1.68× (1.05–2.51) | 5.38× (3.84–13.9) | 4.08× (2.13–9.08) | 11.3× (5.39–27.7) | |
 | Safe read, GCC | 1.85× (1.04–2.78) | 4.77× (3.75–10.8) | 4.11× (2.30–9.25) | 10.7× (5.44–25.7) | |
@@ -236,6 +267,19 @@ These numbers describe these workloads on this machine; they are not guarantees.
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmarks/write-dark.svg">
   <img alt=".NET write time per workload for Tessera, FlatBuffers, MessagePack, MemoryPack, Protocol Buffers and System.Text.Json" src="docs/images/benchmarks/write-light.svg">
 </picture>
+
+### .NET read
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmarks/deserialize-dark.svg">
+  <img alt=".NET deserialize time per workload for Tessera, MemoryPack, MessagePack, Protocol Buffers and System.Text.Json" src="docs/images/benchmarks/deserialize-light.svg">
+</picture>
+
+`Deserialize` checks the buffer as it creates the objects; without the check (`TesseraReadOptions.Trusted`, for data a
+program wrote itself) it is up to 19% faster. Reading every field in place with the read types, checked too, creates
+nothing: 44 µs instead of 59 for the prefab, 71 instead of 253 for the dictionaries. It takes longer than deserializing
+only on the records and canada, because the benchmark mixes every value read into a checksum (80,000 fields and 111,126
+coordinates), where deserializing copies them.
 
 ### Buffer size
 
@@ -282,6 +326,9 @@ faster (the table above).
   MemoryPack on all five, and faster on the dictionaries. MemoryPack writes the fields one after another, with nothing
   that would let a reader find a field without reading everything before it, and only .NET can read it; Tessera also
   writes the offsets and bits that let C++ read any field directly.
+- **Reading in .NET, against MemoryPack**, on canada by 0.7% (94.2 µs against 93.5), within the measurements'
+  spread: both create the same objects (920,376 bytes allocated) and copy the same 55,563 points. On the other eight
+  workloads, Tessera's checked `Deserialize` is 1.01–1.44× faster.
 - **Size, against MessagePack and Protocol Buffers** on six of the nine workloads (1.07–1.70×), and **MemoryPack** on
   four (1.00–1.15×): see Buffer size above.
 - **C++ reads: by no more than 1.1%.** Reading every field ties with FlatBuffers on a few workloads (within 1.1%):
@@ -399,6 +446,8 @@ as the `Reader`. The matching compares the actual layouts, and never trusts the 
 | Generated | Where | Contents |
 |---|---|---|
 | C# serializers | compiled into your assembly | one per class, no reflection |
+| C# read types and checks | compiled into your assembly | one read type per class (`MonsterView`), list and dictionary, and a check of buffers per type |
+| C# deserializers | compiled into your assembly | one per class, compiled three ways: checking the buffer as it reads; reading a buffer checked before; and creating each stored item once, for buffers that share items heavily |
 | C++ headers | `TesseraCppOutputDir`, after each build | one per class (in a folder per C++ namespace), and one per assembly that includes them all |
 | C++ library | copied next to the headers | header-only: accessor classes, `Reader`, validation, conversion between versions, JSON output |
 
@@ -413,6 +462,8 @@ The [documentation](docs/README.md) explains everything, with an example and the
   `[TesseraName]`, default values, `[TesseraKeepDefault]`, `[TesseraShared]`, `[TesseraUnion]`.
 - [Options](docs/options/README.md): [`Sharing`](docs/options/sharing.md), `IncludeSchema`, `WriteDefaults`,
   `MaxDepth`, and the [C++ read options](docs/options/cpp-read-options.md).
+- [Reading in .NET](docs/guide/reading-dotnet.md): the generated read types, `Deserialize`, and the
+  [.NET read options](docs/options/dotnet-read-options.md).
 - [Changing your classes](docs/guide/versioning.md): which changes keep data saved earlier readable.
 - [Classes in several projects](docs/guide/multiple-projects.md), [MSBuild settings](docs/guide/msbuild.md), the
   [C# API](docs/api/csharp.md) and the [C++ API](docs/api/cpp.md).

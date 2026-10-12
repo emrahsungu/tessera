@@ -53,8 +53,8 @@ All three throw `ArgumentNullException` for a null value, and `TesseraException`
 
 ### `Deserialize<T>(ReadOnlySpan<byte> buffer, TesseraReadOptions? options = null)` → `T`
 
-Checks the buffer (unless the options say otherwise), then creates the `T` it holds, with all its objects, lists,
-dictionaries and strings.
+Creates the `T` that the buffer holds, with all its objects, lists, dictionaries and strings, checking the buffer as it
+reads it (unless the options say otherwise).
 
 ```csharp
 Monster orc = TesseraSerializer.Deserialize<Monster>(File.ReadAllBytes("monster.bin"));

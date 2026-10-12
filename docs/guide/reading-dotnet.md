@@ -114,8 +114,9 @@ of your classes can hold a class this program does not know: `Tag` then has a va
 Monster orc = TesseraSerializer.Deserialize<Monster>(buffer);
 ```
 
-`Deserialize` checks the buffer as `Read` does, then creates the objects in it. `TryDeserialize` returns `false` and the
-reason instead of throwing:
+`Deserialize` checks the buffer as `Read` does and creates the objects in it, in one pass: each object, list and string
+is checked right before it is read. It accepts exactly the buffers that `Read` accepts, and fails with the same errors.
+`TryDeserialize` returns `false` and the reason instead of throwing:
 
 ```csharp
 if (!TesseraSerializer.TryDeserialize(buffer, out Monster? orc, out TesseraReadError error)) Reject(error);

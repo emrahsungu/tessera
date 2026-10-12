@@ -30,8 +30,9 @@ The same options do the same for C++: [C++ read options](cpp-read-options.md).
 ### `Verify` (default: `true`)
 
 Check the whole buffer before the first read. It reads the buffer once, without copying it: in the
-[benchmarks](../BENCHMARKS.md), 4–56 microseconds for buffers of 33–580 KB, 1 µs for canada's 895 KB of
-coordinates. After it, each field is read without checks.
+[benchmarks](../BENCHMARKS.md), 4–57 microseconds for buffers of 33–580 KB of objects, and 2 µs for canada's 895 KB of
+coordinates. After it, each field is read without checks. `Deserialize` checks as it creates the objects, in the same
+pass.
 
 `Verify = false` (or `TesseraReadOptions.Trusted`) checks the 16-byte header only. A buffer written by another
 version of your classes is still matched by name and converted.

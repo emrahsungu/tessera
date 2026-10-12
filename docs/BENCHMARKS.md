@@ -17,6 +17,8 @@ How many times faster (or smaller) Tessera is: the other library's time or size 
 |---|---:|---:|---:|---:|---:|
 | Size | **1.27** (1.00–3.37) | 0.90 (0.59–2.01) | 0.92 (0.65–1.42) | **2.15** (1.30–3.04) | **1.28** (0.87–8.48) |
 | .NET write | **9.41** (1.65–99.96) | **3.32** (1.30–10.79) | **6.32** (3.36–27.79) | **20.63** (7.57–206.41) | 0.99 (0.65–1.60) |
+| .NET deserialize |  | **4.55** (1.88–13.91) | **4.20** (2.51–18.59) | **22.13** (7.48–173.14) | **1.14** (0.99–1.44) |
+| .NET read every field in place, unchecked | **5.94** (4.70–10.20) |  |  |  |  |
 | C++ verify (clang 19.1) | **2.99** (1.68–9.25) | **17.77** (6.46–1459.04) | **12.81** (4.80–706.79) | **24.89** (10.80–2868.29) |  |
 | C++ full traversal (clang 19.1) | **1.05** (1.00–1.18) |  |  |  |  |
 | C++ verify + traversal (clang 19.1) | **1.68** (1.05–2.51) | **5.38** (3.84–13.93) | **4.08** (2.13–9.08) | **11.26** (5.39–27.66) |  |
@@ -30,11 +32,14 @@ How many times faster (or smaller) Tessera is: the other library's time or size 
 | C++ verify + traversal (msvc 19.42.34444) | **1.62** (1.03–3.33) | **6.83** (4.59–17.62) | **5.95** (2.33–12.47) | **18.44** (6.05–56.20) |  |
 | C++ random access (msvc 19.42.34444) | **1.33** (1.14–1.79) |  |  |  |  |
 
+In .NET, "deserialize" checks the buffer and creates the objects (Tessera's `Deserialize`, Protobuf's parse into its own message classes, the others' deserializers into the same classes); "read every field in place" reads a buffer without creating objects, which FlatBuffers does without checking it (its C# verifier cannot check buffers over 32 KB), so Tessera's is unchecked too. The .NET read section below has both, checked and unchecked.
+
 MessagePack, Protobuf and JSON are parsed before they are read: their "verify" is the parse (into a tree for MessagePack and Protobuf, into simdjson's DOM for JSON), and their traversal and random access read a tree parsed beforehand, so those two are left out of their columns. JSON is written by System.Text.Json and read by simdjson. MemoryPack has no C++ reader. How each parser is set up is in the C++ section below.
 
 Where Tessera is slower or larger in these results (by more than 5% for the C++ reads), and why:
 
 - **.NET write** (MemoryPack faster): monsters 1.11×, dense-unique 1.53×, dense-shared 1.21×, lookup 1.01×, canada 1.02×. MemoryPack writes the members one after another, with nothing that lets a reader find one without reading those before it, and copies arrays of plain structs as they lie in memory; it can only be read from the start, and only by .NET.
+- **.NET deserialize** (MemoryPack faster): canada 1.01×. On canada, both create the same objects (920,376 bytes allocated) and copy the same values.
 - **Size** (MessagePack smaller): monsters 1.19×, series 1.11×, dense-unique 1.69×, sparse-unique 1.26×, dense-shared 1.70×, lookup 1.39×. MessagePack stores small integers in one or two bytes; Tessera keeps values fixed-width so they can be read in place.
 - **Size** (Protobuf smaller): monsters 1.07×, series 1.24×, dense-unique 1.53×, sparse-unique 1.31×, dense-shared 1.33×, lookup 1.09×. Protobuf stores integers as varints (one byte for small values) and leaves out zeros; Tessera keeps values fixed-width so they can be read in place.
 - **Size** (MemoryPack smaller): monsters 1.08×, dense-unique 1.15×, lookup 1.09×, canada 1.00×. MemoryPack writes the members one after another, with nothing that lets a reader find one without reading those before it; Tessera stores the offsets that let C++ read any member directly.
@@ -114,6 +119,52 @@ Bytes allocated per write without the final copy:
 | dense-shared | 0 | 0 | 0 | 0 | 213,192 | 0 | 376,416 |
 | lookup | 0 | 4,791,936 | 0 | 0 | 822,648 | 0 | 1,065,600 |
 | canada | 0 | 120 | 0 | 0 | 3,581,504 | 0 | 10,980,280 |
+
+## .NET read (µs per buffer, lower is better)
+
+Deserializing: a buffer (`byte[]`) to the objects it holds. Tessera checks the buffer as it creates the objects (`TesseraSerializer.Deserialize<T>`); "Tessera (unchecked)" skips the check (`TesseraReadOptions.Trusted`), as for data a program wrote itself. MemoryPack, MessagePack and both JSON libraries create the same classes; Protobuf parses into its own generated message classes, which a program then uses as they are. Every result is checked against the checksum of the objects it was written from before anything is timed. The fastest of the checked reads is in bold.
+
+Measured with BenchmarkDotNet, as the .NET write: every case in a process of its own. The lookup cases were measured again at 2026-10-12 22:55:16Z: in the first run, other work on the machine disturbed Tessera’s deserialize case (20% MAD).
+
+| Workload | Tessera | Tessera (unchecked) | MemoryPack | MessagePack | System.Text.Json | Newtonsoft.Json | Protobuf (parse) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| prefab | **58.6** | 54.3 | 66.1 | 295 | 1,800 | 3,788 | 329 |
+| monsters | **155** | 139 | 190 | 584 | 3,052 | 5,861 | 611 |
+| records | **184** | 180 | 235 | 1,285 | 1,823 | 2,586 | 578 |
+| series | **321** | 290 | 337 | 1,011 | 6,783 | 14,491 | 924 |
+| dense-unique | **41.3** | 35.6 | 41.9 | 145 | 710 | 1,608 | 145 |
+| sparse-unique | **22.7** | 19.3 | 24.3 | 106 | 441 | 932 | 56.8 |
+| dense-shared | **29.8** | 25.0 | 42.9 | 139 | 691 | 1,581 | 143 |
+| lookup | **253** | 245 | 284 | 475 | 1,895 | 3,636 | 658 |
+| canada | 94.2 | 94.6 | **93.5** | 1,311 | 16,308 | 31,522 | 1,751 |
+
+Bytes allocated per read:
+
+| Workload | Tessera | Tessera (unchecked) | MemoryPack | MessagePack | System.Text.Json | Newtonsoft.Json | Protobuf (parse) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| prefab | 165,840 | 165,840 | 190,216 | 190,216 | 332,096 | 1,521,120 | 397,968 |
+| monsters | 394,176 | 394,176 | 454,304 | 454,640 | 684,776 | 2,516,484 | 809,488 |
+| records | 671,040 | 671,040 | 722,376 | 722,376 | 739,800 | 1,566,984 | 499,448 |
+| series | 1,140,504 | 1,140,504 | 1,132,288 | 1,132,288 | 1,497,328 | 5,094,328 | 1,656,976 |
+| dense-unique | 163,968 | 163,968 | 155,752 | 155,752 | 246,552 | 872,856 | 254,368 |
+| sparse-unique | 97,408 | 97,408 | 89,192 | 89,192 | 115,480 | 624,640 | 116,128 |
+| dense-shared | 124,288 | 124,288 | 155,752 | 155,752 | 246,552 | 797,184 | 254,368 |
+| lookup | 695,496 | 695,496 | 687,280 | 687,280 | 1,492,632 | 2,643,248 | 1,062,816 |
+| canada | 920,376 | 920,376 | 920,376 | 920,376 | 4,446,304 | 13,821,224 | 3,581,880 |
+
+Reading in place: every field of a buffer, without creating objects, into the same checksum as the C++ readers (strings by their UTF-8 bytes, not decoded). Tessera reads through its generated read types (`MonsterView.Read`), with its check and without; FlatBuffers through its generated accessors, without its verifier: FlatBuffers' C# verifier (25.12.19) cannot check buffers over 32 KB, which it rejects or misreads as missing fields.
+
+| Workload | Tessera: check + every field | Tessera: every field | FlatBuffers: every field |
+|---|---:|---:|---:|
+| prefab | 43.9 | **33.3** | 217 |
+| monsters | 87.5 | **57.4** | 388 |
+| records | 206 | **186** | 911 |
+| series | 233 | **176** | 830 |
+| dense-unique | 28.7 | **20.2** | 102 |
+| sparse-unique | 19.8 | **15.7** | 78.4 |
+| dense-shared | 28.6 | **20.2** | 102 |
+| lookup | 70.6 | **48.1** | 337 |
+| canada | 149 | **147** | 1,499 |
 
 ## C++ read
 
