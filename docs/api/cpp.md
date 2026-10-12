@@ -91,6 +91,10 @@ bool saved = m.has_mana();                    // was the field saved?
 | `explicit operator bool()` | false for an empty accessor object: a null object field, or the `root()` of a failed `Reader` |
 | `tessera_data()` | the object's address in the buffer, for debugging or hashing |
 
+Only nullable value types (`int?`, `bool?`, `Vec3?`, nullable enums) return `std::optional`. Strings, lists,
+dictionaries and objects are never wrapped in it, nullable or not: a missing one reads as empty and converts to `false`
+([Missing values](../guide/supported-types.md#missing-values-stdoptional-only-for-value-types)).
+
 Reading a field of an empty accessor object returns the field's default, so a chain such as
 `save.player().weapon().damage()` never crashes on a null in between.
 

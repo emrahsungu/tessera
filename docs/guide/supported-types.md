@@ -29,6 +29,43 @@ single byte. A class can have up to 4,096 saved fields ([TESSERA005](../diagnost
 Every field also gets `has_x()`, which tells whether the field was saved. A field equal to its default value isn't
 saved ([Default values](../attributes/default-value.md)), and reads as that default.
 
+## Missing values: `std::optional` only for value types
+
+What a field's method returns when the C# value was null, or the field wasn't saved:
+
+| C# field type | C++ returns | When the value is missing |
+|---|---|---|
+| nullable value type: `int?`, `bool?`, `Color?`, `Vec3?` | `std::optional<T>` | `std::nullopt` |
+| non-nullable value type: `int`, `bool`, `Color`, `Vec3` | `T` | the field's default value |
+| `string` | `std::string_view` | an empty view whose `data()` is `nullptr` |
+| list or array | `tessera::Vector<T>` | an empty vector that converts to `false` |
+| dictionary | `tessera::Map<K, V>` | an empty map that converts to `false` |
+| class or record | its accessor class | an accessor that converts to `false`; its fields read as their defaults |
+| field declared as a base class or interface | its accessor class | `type()` returns `Tag::None`, and it converts to `false` |
+
+So **`std::optional` appears only for nullable value types** (numbers, `bool`, `char`, enums and plain structs). Those
+types have no spare value that could mean "missing", so C++ needs the wrapper.
+
+**Strings, lists, dictionaries and objects are never wrapped in `std::optional`**, whether the C# field is nullable or
+not (`List<Weapon>?` and `List<Weapon>` become the same `tessera::Vector<Weapon>`). They are pointers into the buffer,
+and "missing" is simply one more value of that pointer. A missing one behaves as empty, so you can use it without
+unwrapping, and it converts to `false` when you need to tell:
+
+```cpp
+std::optional<std::int32_t> mana = orc.mana();     // int? Mana: check before use
+int value = mana.value_or(0);
+
+tessera::Vector<game::Weapon> weapons = orc.weapons();  // List<Weapon>? Weapons: no unwrapping
+for (game::Weapon w : weapons) use(w);              // a null list iterates as empty
+if (!weapons) { /* the C# list was null */ }
+if (weapons && weapons.empty()) { /* an empty list was saved */ }
+
+std::string_view name = orc.name();                 // string? Name
+if (name.data() == nullptr) { /* the C# string was null */ }
+```
+
+For any field, `has_x()` also tells whether a value was saved: `orc.has_weapons()` is the same as `bool(orc.weapons())`.
+
 ## Plain structs
 
 A struct with only numbers, enums, `bool`, `char` and other plain structs inside is stored inside the object that

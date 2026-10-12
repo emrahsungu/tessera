@@ -105,6 +105,10 @@ Orc: hp 100, mana 25, position 1 2 3
 is a pointer into the buffer, wrapped in a class: keep the buffer (and the `Reader`) alive while you use it. The whole
 example, including loading the file, is in [samples/Quickstart](samples/Quickstart).
 
+`mana()` returns `std::optional` because `int?` is a nullable value type. Strings, lists and objects are never wrapped
+in `std::optional`: if a monster's `Weapons` was null, `weapons()` is simply empty, and converts to `false`
+([Missing values](docs/guide/supported-types.md#missing-values-stdoptional-only-for-value-types)).
+
 ### What the 328 bytes hold
 
 | Part | Bytes | Contents |

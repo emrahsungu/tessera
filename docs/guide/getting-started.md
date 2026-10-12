@@ -111,10 +111,13 @@ Orc: hp 100, mana 25, position 1 2 3
 
 Add `TesseraCppOutputDir` to your C++ include path; the sample's `cpp/CMakeLists.txt` shows how.
 
-Three things to notice:
+Four things to notice:
 
 - **`hp` wasn't saved**, because it equaled its default value. C++ returned the default compiled into the header;
   `orc.has_hp()` would return false.
+- **`mana()` returns `std::optional`, `weapons()` doesn't.** Only nullable value types such as `int?` are wrapped in
+  `std::optional`. A null string, list or object reads as empty and converts to `false`, so `orc.weapons()` can be
+  looped over directly ([Missing values](supported-types.md#missing-values-stdoptional-only-for-value-types)).
 - **`orc` is a pointer into the buffer**, wrapped in a class. Keep the buffer, and the `Reader`, alive while you use it.
 - **The buffer must start at an 8-byte aligned address**, as memory from `new`, `malloc` or a
   `std::vector<std::uint64_t>` does; the `Reader` reports `Error::Misaligned` otherwise.

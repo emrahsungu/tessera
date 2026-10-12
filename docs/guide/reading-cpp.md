@@ -55,8 +55,11 @@ const game::Vec3& p = orc.position();          // plain structs: a reference int
 bool saved = orc.has_mana();                   // has_x() for every field
 ```
 
-Reading a field of a missing object returns the field's default, so `save.player().weapon().damage()` never crashes on
-a null along the way.
+Only nullable value types (`int?`, `bool?`, `Vec3?`, nullable enums) come back as `std::optional`. A missing string,
+list, dictionary or object is never wrapped in `std::optional`: it reads as empty and converts to `false`, so you can
+use it without unwrapping ([Missing values](supported-types.md#missing-values-stdoptional-only-for-value-types)).
+Reading a field of a missing object returns the field's default, so `save.player().weapon().damage()` never crashes
+on a null along the way.
 
 ### Lists and arrays
 
