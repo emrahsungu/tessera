@@ -31,6 +31,19 @@ public static class JsonFormats
 {
     public static JsonTypeInfo<T> Stj<T>() => (JsonTypeInfo<T>)BenchJson.Default.GetTypeInfo(typeof(T))!;
 
+    /// <summary>Newtonsoft.Json from UTF-8 bytes.</summary>
+    public sealed class NewtonsoftReader
+    {
+        private readonly NJ.JsonSerializer _serializer = NewtonsoftSerializer();
+
+        public T Read<T>(byte[] utf8)
+        {
+            using var text = new StreamReader(new MemoryStream(utf8, writable: false), Encoding.UTF8, false, 1 << 16);
+            using var json = new NJ.JsonTextReader(text);
+            return _serializer.Deserialize<T>(json)!;
+        }
+    }
+
     private static NJ.JsonSerializer NewtonsoftSerializer() => NJ.JsonSerializer.Create(new NJ.JsonSerializerSettings
     {
         NullValueHandling = NJ.NullValueHandling.Ignore,
@@ -65,7 +78,15 @@ public static class JsonFormats
             [typeof(LayoutComponent)] = "Layout", [typeof(ControllerComponent)] = "Controller",
         };
 
-        public Type BindToType(string? assemblyName, string typeName) => throw new NotSupportedException("the benchmark only writes JSON");
+        public Type BindToType(string? assemblyName, string typeName)
+        {
+            foreach (var (type, name) in s_names)
+            {
+                if (name == typeName) return type;
+            }
+
+            throw new NotSupportedException("unknown component type " + typeName);
+        }
 
         public void BindToName(Type serializedType, out string? assemblyName, out string? typeName)
         {

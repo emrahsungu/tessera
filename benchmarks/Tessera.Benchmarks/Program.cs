@@ -18,16 +18,30 @@ using MessagePack;
 using Perfolizer.Horology;
 using Tessera;
 
-// Usage: Tessera.Benchmarks [--export-only] [--quick] [--launches N] [--rounds N] [--round-ms N] [--warmup-ms N] [--filter text]
-//                           [--libraries name,name]
+// Usage: Tessera.Benchmarks [--read] [--export-only] [--quick] [--launches N] [--rounds N] [--round-ms N] [--warmup-ms N]
+//                           [--filter text] [--libraries name,name]
+//        Tessera.Benchmarks --check-reads
 //        Tessera.Benchmarks --report <results dir> <out.md>
 // 1. builds the workloads, writes every library's buffer and the expected checksums for the C++ benchmark,
 // 2. times serialization with BenchmarkDotNet (unless --export-only) and writes benchmarks/results/dotnet.json:
 //    every case in --launches processes of its own (default 1), each N iterations of about --round-ms after warmup.
 //    Several launches matter: dynamic PGO does not settle on the same code in every process.
+//    With --read, it times reading instead (deserializing, or reading in place with a traversal of every field) and
+//    writes benchmarks/results/dotnet-read.json; --check-reads only checks that every read gives back every field.
 // --filter keeps only cases whose "workload/library/variant" contains the text (for focused tuning), and --libraries
 // only those libraries' cases (a name includes its variants: "Tessera" also selects "Tessera (no sharing)").
 CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
+if (args.Length == 1 && args[0] == "--check-reads")
+{
+    foreach (string key in Catalog.ReadKeys)
+    {
+        Catalog.CreateReadOp(key)();
+        Console.WriteLine("ok  " + key);
+    }
+
+    return 0;
+}
+
 if (args.Length == 3 && args[0] == "--report")
 {
     // --report <results dir> <output .md>: tables from the JSON written by this program and benchmarks/native, and the
@@ -40,6 +54,7 @@ if (args.Length == 3 && args[0] == "--report")
 }
 
 bool exportOnly = args.Contains("--export-only");
+bool read = args.Contains("--read");
 bool quick = args.Contains("--quick");
 int rounds = ArgInt("--rounds", quick ? 3 : 11);
 int roundMs = ArgInt("--round-ms", 100);
@@ -64,9 +79,11 @@ int librariesAt = Array.IndexOf(args, "--libraries");
 string[] libraries = librariesAt >= 0 && librariesAt + 1 < args.Length
     ? args[librariesAt + 1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
     : [];
-WriteBenchmarks.Selected = Catalog.Keys
+List<string> selected = (read ? Catalog.ReadKeys : Catalog.Keys)
     .Where(k => k.Contains(filter, StringComparison.Ordinal) && (libraries.Length == 0 || libraries.Any(l => IsLibrary(k, l))))
     .ToList();
+WriteBenchmarks.Selected = selected;
+ReadBenchmarks.Selected = selected;
 
 // One process per case and collections forced between iterations (both BenchmarkDotNet's defaults). Result arrays up
 // to 4 MB are allocated as ordinary objects that die young: with the default large-object threshold (85 KB), the full
@@ -85,7 +102,7 @@ var job = Job.Default
     .WithGcConcurrent(false)
     .WithGcForce(true)
     .WithEnvironmentVariables(new EnvironmentVariable("DOTNET_GCLOHThreshold", "0x400000"))
-    .WithId("write");
+    .WithId(read ? "read" : "write");
 var config = ManualConfig.CreateEmpty()
     .AddJob(job)
     .AddDiagnoser(MemoryDiagnoser.Default)
@@ -95,7 +112,8 @@ var config = ManualConfig.CreateEmpty()
 // BenchmarkDotNet rebuilds the project it finds from the current directory (up to the solution file, then down by the
 // project's file name): make that this checkout, whichever directory this program was started from.
 Directory.SetCurrentDirectory(root);
-Summary summary = BenchmarkRunner.Run<WriteBenchmarks>(config);
+Summary summary = read ? BenchmarkRunner.Run<ReadBenchmarks>(config) : BenchmarkRunner.Run<WriteBenchmarks>(config);
+string third = read ? "operation" : "variant";
 
 var rows = new List<Dictionary<string, object>>();
 var failed = new List<string>();
@@ -115,13 +133,13 @@ foreach (BenchmarkReport report in summary.Reports)
     var st = Stats.Of(us);
     rows.Add(new Dictionary<string, object>
     {
-        ["workload"] = parts[0], ["library"] = parts[1], ["variant"] = parts[2],
+        ["workload"] = parts[0], ["library"] = parts[1], [third] = parts[2],
         ["median_us"] = st.Median, ["min_us"] = st.Min, ["max_us"] = st.Max, ["mad_percent"] = st.MadPercent,
         ["alloc_bytes"] = (double)(report.GcStats.GetBytesAllocatedPerOperation(report.BenchmarkCase) ?? 0), ["samples_us"] = us,
     });
 }
 
-foreach (string key in WriteBenchmarks.Selected.Except(rows.Select(r => $"{r["workload"]}/{r["library"]}/{r["variant"]}")).Except(failed)) failed.Add(key);
+foreach (string key in selected.Except(rows.Select(r => $"{r["workload"]}/{r["library"]}/{r[third]}")).Except(failed)) failed.Add(key);
 if (failed.Count > 0)
 {
     Console.Error.WriteLine("BenchmarkDotNet produced no measurements for: " + string.Join(", ", failed) + " (logs in benchmarks/results/bdn)");
@@ -129,25 +147,25 @@ if (failed.Count > 0)
 }
 
 // Report order: the catalog's.
-var order = Catalog.Keys.Select((k, i) => (k, i)).ToDictionary(x => x.k, x => x.i);
-rows.Sort((a, b) => order[$"{a["workload"]}/{a["library"]}/{a["variant"]}"].CompareTo(order[$"{b["workload"]}/{b["library"]}/{b["variant"]}"]));
+var order = (read ? Catalog.ReadKeys : Catalog.Keys).Select((k, i) => (k, i)).ToDictionary(x => x.k, x => x.i);
+rows.Sort((a, b) => order[$"{a["workload"]}/{a["library"]}/{a[third]}"].CompareTo(order[$"{b["workload"]}/{b["library"]}/{b[third]}"]));
 var outDir = Path.Combine(root, "benchmarks", "results");
 Directory.CreateDirectory(outDir);
 var doc = new Dictionary<string, object>
 {
     ["environment"] = HostInfo(),
     ["settings"] = new Dictionary<string, object> { ["launches"] = launches, ["rounds"] = rounds, ["round_ms"] = roundMs, ["tool"] = "BenchmarkDotNet " + Version(typeof(BenchmarkRunner)) },
-    ["write"] = rows,
-    ["sizes"] = sizes.Select(s => new Dictionary<string, object> { ["workload"] = s.Workload, ["library"] = s.Library, ["bytes"] = s.Bytes, ["gzip"] = s.Gzip }).ToList(),
+    [read ? "read" : "write"] = rows,
 };
-File.WriteAllText(Path.Combine(outDir, "dotnet.json"), JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true }));
+if (!read) doc["sizes"] = sizes.Select(s => new Dictionary<string, object> { ["workload"] = s.Workload, ["library"] = s.Library, ["bytes"] = s.Bytes, ["gzip"] = s.Gzip }).ToList();
+File.WriteAllText(Path.Combine(outDir, read ? "dotnet-read.json" : "dotnet.json"), JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true }));
 
 Console.WriteLine();
-Console.WriteLine("| Workload | Library | Variant | Median µs | ±MAD | Alloc bytes/op |");
+Console.WriteLine($"| Workload | Library | {(read ? "Operation" : "Variant")} | Median µs | ±MAD | Alloc bytes/op |");
 Console.WriteLine("|---|---|---|---:|---:|---:|");
 foreach (var r in rows)
 {
-    Console.WriteLine($"| {r["workload"]} | {r["library"]} | {r["variant"]} | {(double)r["median_us"]:N1} | {(double)r["mad_percent"]:N1}% | {(double)r["alloc_bytes"]:N0} |");
+    Console.WriteLine($"| {r["workload"]} | {r["library"]} | {r[third]} | {(double)r["median_us"]:N1} | {(double)r["mad_percent"]:N1}% | {(double)r["alloc_bytes"]:N0} |");
 }
 
 return 0;

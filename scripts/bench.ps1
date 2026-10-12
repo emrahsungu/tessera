@@ -58,6 +58,7 @@ if (-not $NoGcc -and (Get-Command wsl -ErrorAction SilentlyContinue)) {
 # @(...) keeps a one-element list an array: splatting a plain string would pass it one character at a time.
 $writeArgs = @(if ($Quick) { '--quick' } else { '--launches', '3', '--rounds', '10', '--round-ms', '100' })
 Run '.NET write benchmark' { dotnet run --project $proj -c Release --no-build -- @writeArgs }
+Run '.NET read benchmark' { dotnet run --project $proj -c Release --no-build -- --read @writeArgs }
 Run 'report' { dotnet run --project $proj -c Release --no-build -- --report $results (Join-Path $root 'docs/BENCHMARKS.md') }
 # Keep the raw data next to the report (benchmarks/results itself is git-ignored scratch space).
 $raw = Join-Path $root 'docs/benchmarks'

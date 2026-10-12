@@ -11,18 +11,24 @@ namespace Bench;
 /// <summary>Builds docs/BENCHMARKS.md-style tables from benchmarks/results/*.json.</summary>
 public static class Report
 {
-    /// <summary>A library Tessera is compared with, under the names the results give it per measurement (null: not measured).</summary>
-    internal sealed record Rival(string Name, string? Size, string? Write, string? Read);
+    /// <summary>
+    /// A library Tessera is compared with, under the names the results give it per measurement (null: not measured);
+    /// <paramref name="Deserialize"/> creates the objects in .NET (Protobuf: parses into its own messages).
+    /// </summary>
+    internal sealed record Rival(string Name, string? Size, string? Write, string? Read, string? Deserialize);
 
-    /// <summary>JSON is written by System.Text.Json and read by simdjson; MemoryPack has no C++ reader.</summary>
+    /// <summary>JSON is written by System.Text.Json and read by simdjson in C++; MemoryPack has no C++ reader.</summary>
     internal static readonly Rival[] Rivals =
     {
-        new("FlatBuffers", "FlatBuffers", "FlatBuffers", "FlatBuffers"),
-        new("MessagePack", "MessagePack", "MessagePack", "MessagePack"),
-        new("Protobuf", "Protobuf", "Protobuf", "Protobuf"),
-        new("JSON", "JSON", "System.Text.Json", "JSON"),
-        new("MemoryPack", "MemoryPack", "MemoryPack", null),
+        new("FlatBuffers", "FlatBuffers", "FlatBuffers", "FlatBuffers", null),
+        new("MessagePack", "MessagePack", "MessagePack", "MessagePack", "MessagePack"),
+        new("Protobuf", "Protobuf", "Protobuf", "Protobuf", "Protobuf"),
+        new("JSON", "JSON", "System.Text.Json", "JSON", "System.Text.Json"),
+        new("MemoryPack", "MemoryPack", "MemoryPack", null, "MemoryPack"),
     };
+
+    /// <summary>A .NET read: deserializing (Protobuf: parsing into its messages), or reading every field in place.</summary>
+    internal static string DeserializeOp(string library) => library == "Protobuf" ? "parse" : "deserialize";
 
     /// <summary>The C++ readers that parse a buffer before reading it: their traversal and random access read a tree parsed beforehand.</summary>
     internal static readonly string[] Parsers = { "MessagePack", "Protobuf", "JSON" };
@@ -62,6 +68,8 @@ public static class Report
             .ToList();
         double Bytes(string w, string lib) => sizes.FirstOrDefault(s => s.Workload == w && s.Library == lib)?.Bytes ?? 0;
         double WriteUs(string w, string lib, string variant = "to byte[]") => write.FirstOrDefault(x => x.Workload == w && x.Library == lib && x.Variant == variant)?.Us ?? 0;
+        var read = DotnetReads(resultsDir);
+        double ReadUs(string w, string lib, string op) => read.FirstOrDefault(x => x.Workload == w && x.Library == lib && x.Variant == op)?.Us ?? 0;
 
         // ------------------------------------------------------------------ summary
         sb.AppendLine("## Summary");
@@ -87,6 +95,11 @@ public static class Report
 
         Summary("Size", Bytes, r => r.Size);
         Summary(".NET write", (w, lib) => WriteUs(w, lib), r => r.Write);
+        if (read.Count > 0)
+        {
+            Summary(".NET deserialize", (w, lib) => ReadUs(w, lib, DeserializeOp(lib)), r => r.Deserialize);
+            Summary(".NET read every field in place, unchecked", (w, lib) => ReadUs(w, lib, "traversal"), r => r.Name == "FlatBuffers" ? "FlatBuffers" : null);
+        }
         foreach (var native in natives)
         {
             var root = native.RootElement;
@@ -99,11 +112,17 @@ public static class Report
         }
 
         sb.AppendLine();
+        if (read.Count > 0)
+        {
+            sb.AppendLine("In .NET, \"deserialize\" checks the buffer and creates the objects (Tessera's `Deserialize`, Protobuf's parse into its own message classes, the others' deserializers into the same classes); \"read every field in place\" reads a buffer without creating objects, which FlatBuffers does without checking it (its C# verifier cannot check buffers over 32 KB), so Tessera's is unchecked too. The .NET read section below has both, checked and unchecked.");
+            sb.AppendLine();
+        }
+
         sb.AppendLine("MessagePack, Protobuf and JSON are parsed before they are read: their \"verify\" is the parse (into a tree for MessagePack and Protobuf, into simdjson's DOM for JSON), and their traversal and random access read a tree parsed beforehand, so those two are left out of their columns. JSON is written by System.Text.Json and read by simdjson. MemoryPack has no C++ reader. How each parser is set up is in the C++ section below.");
         sb.AppendLine();
         sb.AppendLine($"Where Tessera is slower or larger in these results (by more than {(SlowerMargin - 1) * 100:0}% for the C++ reads), and why:");
         sb.AppendLine();
-        var slower = Slower(natives, workloads, write, sizes);
+        var slower = Slower(natives, workloads, write, sizes, read);
         if (slower.Count == 0) sb.AppendLine("- Nowhere.");
         foreach (string line in slower) sb.AppendLine("- " + line);
         sb.AppendLine();
@@ -159,6 +178,46 @@ public static class Report
         sb.AppendLine();
         Table(sb, "Workload", noCopyColumns, workloads, (w, c) => NoCopy(w, c) is { } row ? row.Alloc.ToString("N0", CultureInfo.InvariantCulture) : "");
         sb.AppendLine();
+
+        // ------------------------------------------------------------------ .NET read
+        if (read.Count > 0)
+        {
+            var deserializeColumns = new (string Title, string Library, string Op)[]
+            {
+                ("Tessera", "Tessera", "deserialize"), ("Tessera (unchecked)", "Tessera", "deserialize, unchecked"), ("MemoryPack", "MemoryPack", "deserialize"),
+                ("MessagePack", "MessagePack", "deserialize"), ("System.Text.Json", "System.Text.Json", "deserialize"),
+                ("Newtonsoft.Json", "Newtonsoft.Json", "deserialize"), ("Protobuf (parse)", "Protobuf", "parse"),
+            };
+            double Col((string Title, string Library, string Op)[] columns, string w, string title) =>
+                columns.First(c => c.Title == title) is var c ? ReadUs(w, c.Library, c.Op) : 0;
+            double ColAlloc((string Title, string Library, string Op)[] columns, string w, string title) =>
+                columns.First(c => c.Title == title) is var c ? read.FirstOrDefault(x => x.Workload == w && x.Library == c.Library && x.Variant == c.Op)?.Alloc ?? 0 : 0;
+            string[] checkedColumns = deserializeColumns.Where(c => c.Title != "Tessera (unchecked)").Select(c => c.Title).ToArray();
+            sb.AppendLine("## .NET read (µs per buffer, lower is better)");
+            sb.AppendLine();
+            sb.AppendLine("Deserializing: a buffer (`byte[]`) to the objects it holds. Tessera checks the buffer, then creates the objects (`TesseraSerializer.Deserialize<T>`); \"Tessera (unchecked)\" skips the check (`TesseraReadOptions.Trusted`), as for data a program wrote itself. MemoryPack, MessagePack and both JSON libraries create the same classes; Protobuf parses into its own generated message classes, which a program then uses as they are. Every result is checked against the checksum of the objects it was written from before anything is timed. The fastest of the checked reads is in bold.");
+            sb.AppendLine();
+            sb.AppendLine("Measured with BenchmarkDotNet, as the .NET write: every case in a process of its own.");
+            sb.AppendLine();
+            Table(sb, "Workload", deserializeColumns.Select(c => c.Title).ToArray(), workloads, (w, c) => Fmt(Col(deserializeColumns, w, c)),
+                (w, c) => Best(checkedColumns.Select(l => (l, Col(deserializeColumns, w, l))), c));
+            sb.AppendLine();
+            sb.AppendLine("Bytes allocated per read:");
+            sb.AppendLine();
+            Table(sb, "Workload", deserializeColumns.Select(c => c.Title).ToArray(), workloads, (w, c) =>
+                ColAlloc(deserializeColumns, w, c) is var a && a > 0 ? a.ToString("N0", CultureInfo.InvariantCulture) : "");
+            sb.AppendLine();
+            var placeColumns = new (string Title, string Library, string Op)[]
+            {
+                ("Tessera: check + every field", "Tessera", "verify + traversal"), ("Tessera: every field", "Tessera", "traversal"),
+                ("FlatBuffers: every field", "FlatBuffers", "traversal"),
+            };
+            sb.AppendLine("Reading in place: every field of a buffer, without creating objects, into the same checksum as the C++ readers (strings by their UTF-8 bytes, not decoded). Tessera reads through its generated read types (`MonsterView.Read`), with its check and without; FlatBuffers through its generated accessors, without its verifier: FlatBuffers' C# verifier (25.12.19) cannot check buffers over 32 KB, which it rejects or misreads as missing fields.");
+            sb.AppendLine();
+            Table(sb, "Workload", placeColumns.Select(c => c.Title).ToArray(), workloads, (w, c) => Fmt(Col(placeColumns, w, c)),
+                (w, c) => c != placeColumns[0].Title && Best(placeColumns.Skip(1).Select(x => (x.Title, Col(placeColumns, w, x.Title))), c));
+            sb.AppendLine();
+        }
 
         // ------------------------------------------------------------------ C++ read
         sb.AppendLine("## C++ read");
@@ -288,7 +347,7 @@ public static class Report
     }
 
     /// <summary>The cases in which Tessera loses, computed from the results, each with its cause.</summary>
-    private static List<string> Slower(List<JsonDocument> natives, string[] workloads, List<Write> write, List<Size> sizes)
+    private static List<string> Slower(List<JsonDocument> natives, string[] workloads, List<Write> write, List<Size> sizes, List<Write> read)
     {
         var lines = new List<string>();
         string X(double r) => r.ToString("0.00", CultureInfo.InvariantCulture) + "×";
@@ -355,6 +414,23 @@ public static class Report
             lines.Add($"**.NET write** ({other} faster): {string.Join(", ", slow.Select(x => $"{x.w} {X(x.Ratio)}"))}.{why}");
         }
 
+        // .NET read: deserializing against the others, reading in place against FlatBuffers (both unchecked).
+        double ReadUs(string w, string lib, string op) => read.FirstOrDefault(x => x.Workload == w && x.Library == lib && x.Variant == op)?.Us ?? 0;
+        foreach (string other in new[] { "MemoryPack", "MessagePack", "Protobuf", "System.Text.Json", "Newtonsoft.Json" })
+        {
+            var slow = workloads.Select(w => (w, Ratio: ReadUs(w, "Tessera", "deserialize") / ReadUs(w, other, DeserializeOp(other))))
+                .Where(x => x.Ratio > 1 && !double.IsInfinity(x.Ratio) && !double.IsNaN(x.Ratio)).ToList();
+            if (slow.Count == 0) continue;
+            string why = other == "MemoryPack"
+                ? " Tessera's time includes its check of the buffer, which MemoryPack does as it reads; without the check (unchecked), see the table. MemoryPack stores strings as UTF-16 by default, so its strings are a copy; Tessera's are UTF-8, decoded."
+                : "";
+            lines.Add($"**.NET deserialize** ({other} faster): {string.Join(", ", slow.Select(x => $"{x.w} {X(x.Ratio)}"))}.{why}");
+        }
+
+        var slowPlace = workloads.Select(w => (w, Ratio: ReadUs(w, "Tessera", "traversal") / ReadUs(w, "FlatBuffers", "traversal")))
+            .Where(x => x.Ratio > 1 && !double.IsInfinity(x.Ratio) && !double.IsNaN(x.Ratio)).ToList();
+        if (slowPlace.Count > 0) lines.Add($"**.NET read every field in place** (FlatBuffers faster): {string.Join(", ", slowPlace.Select(x => $"{x.w} {X(x.Ratio)}"))}.");
+
         // Size: the workloads where another library's buffer is smaller.
         foreach (string other in new[] { "FlatBuffers", "MessagePack", "Protobuf", "MemoryPack", "JSON" })
         {
@@ -372,6 +448,18 @@ public static class Report
         }
 
         return lines;
+    }
+
+    /// <summary>The .NET reads in benchmarks/results/dotnet-read.json (operation in Variant), or none.</summary>
+    private static List<Write> DotnetReads(string resultsDir)
+    {
+        string path = Path.Combine(resultsDir, "dotnet-read.json");
+        if (!File.Exists(path)) return new List<Write>();
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        return doc.RootElement.GetProperty("read").EnumerateArray()
+            .Select(r => new Write(r.GetProperty("workload").GetString()!, r.GetProperty("library").GetString()!, r.GetProperty("operation").GetString()!,
+                r.GetProperty("median_us").GetDouble(), r.GetProperty("alloc_bytes").GetDouble()))
+            .ToList();
     }
 
     /// <summary>"Both take 2–4 ns.": the range of Tessera's and FlatBuffers' open + read one field over all runs.</summary>

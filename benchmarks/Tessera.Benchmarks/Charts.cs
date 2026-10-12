@@ -64,7 +64,17 @@ public static class Charts
             return (Compiler: compiler, Reads: reads);
         }).ToList();
         string[] workloads = sizes.Select(s => s.Workload).Distinct().ToArray();
+        string readPath = Path.Combine(resultsDir, "dotnet-read.json");
+        var dotnetReads = new List<Read>();
+        if (File.Exists(readPath))
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(readPath));
+            dotnetReads = doc.RootElement.GetProperty("read").EnumerateArray()
+                .Select(r => new Read(r.GetProperty("workload").GetString()!, r.GetProperty("library").GetString()!, r.GetProperty("operation").GetString()!, r.GetProperty("median_us").GetDouble()))
+                .ToList();
+        }
 
+        double ReadUs(string w, string lib, string op) => dotnetReads.FirstOrDefault(r => r.Workload == w && r.Library == lib && r.Op == op)?.Us ?? 0;
         double Size(string w, string lib) => sizes.FirstOrDefault(s => s.Workload == w && s.Library == lib).Bytes;
         double WriteUs(string w, string lib) => write.FirstOrDefault(x => x.Workload == w && x.Library == lib).Us;
         static double Op(List<Read> reads, string w, string lib, string prefix) =>
@@ -85,6 +95,12 @@ public static class Charts
             ("Size", "", rivals.Select(r => Versus(r.Size, Size)).ToArray()),
             (".NET write", "", rivals.Select(r => Versus(r.Write, WriteUs)).ToArray()),
         };
+        if (dotnetReads.Count > 0)
+        {
+            summary.Add((".NET deserialize", "", rivals.Select(r => Versus(r.Deserialize, (w, lib) => ReadUs(w, lib, Report.DeserializeOp(lib)))).ToArray()));
+            summary.Add((".NET read every field in place (unchecked)", "",
+                rivals.Select(r => r.Name == "FlatBuffers" ? Versus("FlatBuffers", (w, lib) => ReadUs(w, lib, "traversal")) : double.NaN).ToArray()));
+        }
         foreach (var (title, prefix, parsers) in new[] { ("Verify", "verify", true), ("Verify + read every field", "verify + traversal", true), ("Read every field (trusted)", "full traversal", false), ("1,000 random reads", "random access x1000", false) })
         {
             foreach (var (compiler, reads) in natives)
@@ -99,6 +115,8 @@ public static class Charts
         string[] sizeLibs = { "Tessera", "FlatBuffers", "MessagePack", "MemoryPack", "Protobuf", "JSON" };
         var writeRows = workloads.Select(w => (w, writeLibs.Select(l => WriteUs(w, l)).ToArray())).ToList();
         var sizeRows = workloads.Select(w => (w, sizeLibs.Select(l => Size(w, l)).ToArray())).ToList();
+        string[] readLibs = { "Tessera", "MemoryPack", "MessagePack", "Protobuf", "System.Text.Json" };
+        var readRows = workloads.Select(w => (w, readLibs.Select(l => ReadUs(w, l, Report.DeserializeOp(l))).ToArray())).ToList();
 
         // 4-5. Tessera against FlatBuffers per workload, per compiler.
         List<(string, double[])> PerWorkload(string prefix) =>
@@ -123,6 +141,12 @@ public static class Charts
                 rivals.Select(r => ("vs " + r.Name, t.Of(r.Name))).ToArray(), summary, 0.25, 64));
             Save(outDir, "write", t, GroupedChart(t, ".NET write", "Microseconds per buffer, to byte[]; shorter is better. Each workload has its own scale.",
                 writeLibs.Select(l => (l, t.Of(l))).ToArray(), writeRows, Us));
+            if (dotnetReads.Count > 0)
+            {
+                Save(outDir, "deserialize", t, GroupedChart(t, ".NET deserialize", "Microseconds per buffer, checked, to objects (Protobuf: to its own messages); shorter is better. Each workload has its own scale.",
+                    readLibs.Select(l => (l, t.Of(l))).ToArray(), readRows, Us));
+            }
+
             Save(outDir, "size", t, GroupedChart(t, "Buffer size", "Bytes; shorter is better. Each workload has its own scale.",
                 sizeLibs.Select(l => (l, t.Of(l))).ToArray(), sizeRows, b => b.ToString("N0", Inv)));
             Save(outDir, "safe-read", t, RatioChart(t, "Verify, then read every field: Tessera vs FlatBuffers", "Times faster per workload. Right of 1× Tessera is faster; log scale.",
