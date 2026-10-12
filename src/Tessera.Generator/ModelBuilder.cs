@@ -652,22 +652,30 @@ namespace Tessera.Generator
 
             var layoutAttr = symbol.GetAttributes().FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "System.Runtime.InteropServices.StructLayoutAttribute");
             int pack = 0;
+            bool sequential = true;
             if (layoutAttr != null)
             {
-                if (layoutAttr.ConstructorArguments.Length > 0 && layoutAttr.ConstructorArguments[0].Value is int kind && kind == 2)
+                if (layoutAttr.ConstructorArguments.Length > 0 && layoutAttr.ConstructorArguments[0].Value is int kind)
                 {
-                    Report(Generator.Diagnostics.StructNotSupported, symbol, model.DisplayName, "explicit layout is not supported");
-                    _inProgressStructs.Remove(key);
-                    return null;
+                    if (kind == 2)
+                    {
+                        Report(Generator.Diagnostics.StructNotSupported, symbol, model.DisplayName, "explicit layout is not supported");
+                        _inProgressStructs.Remove(key);
+                        return null;
+                    }
+
+                    sequential = kind == 0;  // LayoutKind.Auto (3) lets .NET reorder the fields
                 }
 
                 foreach (var named in layoutAttr.NamedArguments)
                 {
                     if (named.Key == "Pack" && named.Value.Value is int p) pack = p;
+                    if (named.Key == "Size") sequential = false;  // a declared size can add bytes the buffer does not have
                 }
             }
 
             int offset = 0, maxAlign = 1;
+            bool blockCopy = !model.External && sequential;
             var usedCpp = new HashSet<string>();
             foreach (var f in symbol.GetMembers().OfType<IFieldSymbol>())
             {
@@ -739,6 +747,8 @@ namespace Tessera.Generator
                     sf.Access = f.Name; // raw field name for UnsafeAccessor
                 }
 
+                if (AlignUp(offset, sf.Align) != offset) blockCopy = false;  // padding before this field
+                if (sf.Struct != null ? !sf.Struct.BlockCopy : sf.Kind is WireKind.Bool or WireKind.Char16) blockCopy = false;
                 offset = AlignUp(offset, sf.Align);
                 sf.Offset = offset;
                 offset += sf.Size;
@@ -760,6 +770,7 @@ namespace Tessera.Generator
 
             model.Align = maxAlign;
             model.Size = AlignUp(offset, maxAlign);
+            model.BlockCopy = blockCopy && model.Size == offset;  // no padding at the end either
             _inProgressStructs.Remove(key);
             Register(model);
             return model;

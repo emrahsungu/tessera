@@ -96,6 +96,14 @@ namespace Tessera.Generator
 
         /// <summary>Declared in another assembly: its non-public fields are invisible, so the writer checks the size.</summary>
         public bool External;
+
+        /// <summary>
+        /// Its bytes in .NET memory are exactly its bytes in a buffer, so a vector of it is written with one block copy:
+        /// declared in this project with sequential layout, only numbers, enums and such structs inside (no bool, whose
+        /// byte a copy would not normalize, and no char, which can make .NET reorder fields), and no padding (a copy
+        /// would carry whatever the padding bytes held).
+        /// </summary>
+        public bool BlockCopy;
     }
 
     internal sealed class VectorModel : TypeModel

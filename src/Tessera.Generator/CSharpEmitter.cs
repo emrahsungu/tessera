@@ -576,6 +576,18 @@ namespace Tessera.Generator
                 _w.Line($"ref byte d = ref w.BeginVector(n, {size}, {align});");
                 if (span != null) _w.Line($"var items = {span};");
                 string item = span != null ? "items[i]" : "v[i]";
+                if (e.Kind == WireKind.Struct && e.Struct!.BlockCopy && span != null)
+                {
+                    // The elements' bytes in memory are their bytes in the buffer: one copy. SizeOf is a JIT constant;
+                    // it guards against a layout the generator could not see.
+                    string cs = e.Struct.CsName;
+                    _w.Open($"if (Unsafe.SizeOf<{cs}>() == {size})");
+                    _w.Line($"global::System.Runtime.InteropServices.MemoryMarshal.AsBytes((global::System.ReadOnlySpan<{cs}>)items)" +
+                            $".CopyTo(global::System.Runtime.InteropServices.MemoryMarshal.CreateSpan(ref d, n * {size}));");
+                    _w.Line($"return w.EndVector(n, {size}, {align});");
+                    _w.Close();
+                }
+
                 _w.Open("for (int i = 0; i < n; i++)");
                 if (e.Kind == WireKind.Struct)
                 {
