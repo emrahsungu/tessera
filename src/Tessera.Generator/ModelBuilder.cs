@@ -175,19 +175,21 @@ namespace Tessera.Generator
         {
             if (member.IsStatic || member.IsImplicitlyDeclared) return null;
             ITypeSymbol type;
-            bool isProperty;
+            bool isProperty, readInPlace;
             switch (member)
             {
                 case IFieldSymbol field:
                     if (field.IsConst || field.AssociatedSymbol != null || !IsAccessible(field)) return null;
                     type = field.Type;
                     isProperty = false;
+                    readInPlace = true;
                     break;
                 case IPropertySymbol property:
                     if (property.IsIndexer || property.GetMethod == null || !IsAccessible(property.GetMethod)) return null;
                     if (property.SetMethod == null && !IsAutoProperty(property)) return null;
                     type = property.Type;
                     isProperty = true;
+                    readInPlace = HasPlainGetter(property);
                     break;
                 default:
                     return null;
@@ -218,6 +220,7 @@ namespace Tessera.Generator
                 WireName = wireName,
                 NameHash = XxHash.Hash64(wireName),
                 IsProperty = isProperty,
+                ReadInPlace = readInPlace,
                 Symbol = member,
                 Value = value,
                 KeepDefault = HasAttribute(member, "Tessera.TesseraKeepDefaultAttribute"),
@@ -244,6 +247,23 @@ namespace Tessera.Generator
         private static bool IsAutoProperty(IPropertySymbol property) =>
             property.ContainingType.GetMembers().OfType<IFieldSymbol>()
                 .Any(f => SymbolEqualityComparer.Default.Equals(f.AssociatedSymbol, property));
+
+        /// <summary>
+        /// Whether the getter only returns the backing field, so reading the property twice costs and does what reading
+        /// a field twice does: an auto-property (<c>get;</c>) or a record's positional property, declared in source
+        /// and not overridable. A getter with a body, even one that uses <c>field</c>, may do more.
+        /// </summary>
+        private static bool HasPlainGetter(IPropertySymbol property)
+        {
+            if (property.IsVirtual || property.IsAbstract || (property.IsOverride && !property.IsSealed && !property.ContainingType.IsSealed)) return false;
+            if (!IsAutoProperty(property) || property.GetMethod is not { } getter || getter.DeclaringSyntaxReferences.Length == 0) return false;
+            foreach (var reference in getter.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax() is AccessorDeclarationSyntax accessor && (accessor.Body != null || accessor.ExpressionBody != null)) return false;
+            }
+
+            return true;
+        }
 
         private static int Depth(INamedTypeSymbol? t)
         {

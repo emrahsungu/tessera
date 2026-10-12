@@ -166,6 +166,12 @@ namespace Tessera.Generator
         public string WireName = "";
         public ulong NameHash;   // member identity: xxHash64 of the wire name
         public bool IsProperty;
+
+        /// <summary>
+        /// A field, or a property whose getter only returns its backing field: the writer reads it where it is (more
+        /// than once if needed) instead of copying it into a local first. Other getters run exactly once.
+        /// </summary>
+        public bool ReadInPlace;
         public ISymbol Symbol = null!;
         public ValueModel Value = null!;
         public bool KeepDefault;

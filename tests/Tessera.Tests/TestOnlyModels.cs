@@ -71,3 +71,30 @@ public class Profile
     public System.Collections.Generic.List<SharedModels.Badge>? Badges;
     public SharedModels.Reward? Reward;
 }
+
+/// <summary>
+/// Members behind properties: auto-properties (read where they are, like fields) holding a struct, a nullable struct and
+/// nullable numbers, and a getter with a body, which must run once per write.
+/// </summary>
+[Tessera]
+public class Gauges
+{
+    private int _reads;
+
+    public TestModels.Vec3 Origin { get; set; }
+    public TestModels.Vec3? Target { get; set; }
+    public int? Count { get; set; }
+    public double Ratio { get; init; }
+
+    public float Computed
+    {
+        get
+        {
+            _reads++;
+            return 2.5f;
+        }
+        set { }
+    }
+
+    public int Reads => _reads;
+}

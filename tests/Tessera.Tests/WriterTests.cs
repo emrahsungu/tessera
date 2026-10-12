@@ -343,4 +343,22 @@ public class WriterTests
         int withNone = new BufferReader(TesseraSerializer.Serialize(new Monster())).EntryCount;
         Assert.Equal(withNone + 1, withKey);
     }
+
+    [Fact]
+    public void PropertiesAreReadInPlaceOrOnce()
+    {
+        var g = new Gauges { Origin = new Vec3(1, 2, 3), Target = new Vec3(4, 5, 6), Count = 7, Ratio = 0.25 };
+        var r = Read(TesseraSerializer.Serialize(g));
+        Assert.Equal(1, g.Reads);   // the getter with a body ran once
+        Assert.Equal(2.5f, r[Hash("Computed")]);
+        Assert.Equal(7, r[Hash("Count")]);
+        Assert.Equal(0.25, r[Hash("Ratio")]);
+        byte[] origin = (byte[])r[Hash("Origin")]!, target = (byte[])r[Hash("Target")]!;
+        Assert.Equal(1f, BinaryPrimitives.ReadSingleLittleEndian(origin));
+        Assert.Equal(3f, BinaryPrimitives.ReadSingleLittleEndian(origin.AsSpan(8)));
+        Assert.Equal(6f, BinaryPrimitives.ReadSingleLittleEndian(target.AsSpan(8)));
+
+        var empty = Read(TesseraSerializer.Serialize(new Gauges()));
+        Assert.Equal(new[] { Hash("Computed") }, empty.Keys.ToArray());   // a zero struct, nulls and 0.0 are not stored
+    }
 }

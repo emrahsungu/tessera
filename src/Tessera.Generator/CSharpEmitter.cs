@@ -175,33 +175,29 @@ namespace Tessera.Generator
                 }
             }
 
-            // 2. Inline values and presence (fixed cells are always stored). Nothing from here on branches on whether a
-            // member is set: in sparse data that is unpredictable, and a mispredicted branch costs more than the
-            // arithmetic that replaces it.
-            if (LayoutBuilder.WireOrder(o).Any(UsesWriteDefaults)) _w.Line("bool wd = w.WriteDefaults;");
+            // 2. Presence. Fields and plain properties are read where they are; other getters run once, into a local.
+            // Nothing from here on branches on whether a member is set: in sparse data that is unpredictable, and a
+            // mispredicted branch costs more than the arithmetic that replaces it.
+            bool anyDefaults = LayoutBuilder.WireOrder(o).Any(UsesWriteDefaults);
+            if (anyDefaults) _w.Line("uint wd = 0u - TesseraWriter.Bit(w.WriteDefaults);   // all ones when values equal to their default are written too");
             foreach (var m in LayoutBuilder.WireOrder(o))
             {
-                var v = m.Value;
-                string id = Id(m);
-                if (WireFormat.IsReference(v.Kind)) continue;
-                _w.Line($"var s{id} = v.{m.CsName};");
-                if (v.IsNullableValueType || m.IsFixed) continue;
-                if (v.Kind == WireKind.Bool) continue;
-                if (m.KeepDefault) _w.Line($"bool p{id} = true;");
-                else if (v.Kind == WireKind.Struct) _w.Line($"bool p{id} = wd | !IsDefault{v.Struct!.Index}(in s{id});");
-                else _w.Line($"bool p{id} = wd | ({NotDefault("s" + id, m)});");
+                if (!WireFormat.IsReference(m.Value.Kind) && !m.ReadInPlace) _w.Line($"var s{Id(m)} = v.{m.CsName};");
             }
 
             int words = o.HeaderWords;
             for (int i = 0; i < words; i++) _w.Line($"uint h{i} = 0;");
             foreach (var m in o.Cells) _w.Line($"h{m.Bit / 32} |= {Shift($"TesseraWriter.Bit({Present(m)})", m.Bit % 32)};");
-            foreach (var m in o.Bools)
+            foreach (var m in o.Bools) _w.Line($"h{m.Bit / 32} |= {Shift(BoolBits(m), m.Bit % 32)};");   // a pair never straddles two words
+            if (anyDefaults)
             {
-                // Two bits: present, and the value when present. A pair never straddles two header words.
-                string id = Id(m);
-                string val = m.Value.IsNullableValueType ? $"s{id}.GetValueOrDefault()" : $"s{id}";
-                string present = m.Value.IsNullableValueType ? $"s{id}.HasValue" : (m.KeepDefault ? "true" : $"wd | (s{id} != {BoolLiteral(m)})");
-                _w.Line($"{{ uint b = TesseraWriter.Bit({present}); h{m.Bit / 32} |= {Shift($"(b | (b & TesseraWriter.Bit({val})) << 1)", m.Bit % 32)}; }}");
+                // WriteDefaults: every member that is left out when it equals its default is present. One mask per word
+                // instead of a test per member.
+                var masks = BitMasks(LayoutBuilder.WireOrder(o).Where(UsesWriteDefaults), words);
+                for (int i = 0; i < words; i++)
+                {
+                    if (masks[i] != 0) _w.Line($"h{i} |= wd & 0x{masks[i]:X}u;");
+                }
             }
 
             // The cells' bytes: per cell size, the number of present cells of that size.
@@ -223,10 +219,12 @@ namespace Tessera.Generator
             _w.Line(o.FixedSize > 0 ? $"ref byte o = ref w.BeginObject(size, {o.FixedSize} + cells, {align});" : $"ref byte o = ref w.BeginObject(size, cells, {align});");
             _w.Line("int at = w.Position;");
 
-            // 3. Cells, the last one first, each stored just below the cells after it. An absent cell's value is
-            // stored too but not counted, so the next cell, or the header written afterwards, covers it (an absent
-            // first cell can reach up to 8 bytes in front of the object, into space the writer keeps free).
-            if (o.Cells.Count > 0) _w.Line("int e = size;");
+            // 3. Cells, the last one first, each stored just below the cells after it. Where each one goes follows from
+            // the header bits alone: an absent cell's value is stored too but not counted, so the next cell, or the
+            // header written afterwards, covers it (an absent first cell can reach up to 8 bytes in front of the
+            // object, into space the writer keeps free). A field that another thread changes in the meantime can
+            // change what is stored, never where.
+            if (o.Cells.Count > 0) _w.Line("nint e = size;");
             if (o.RefCellCount > 0)
             {
                 _w.Line($"Span<int> refs = stackalloc int[{o.RefCellCount}];");
@@ -237,6 +235,7 @@ namespace Tessera.Generator
             {
                 var v = m.Value;
                 string id = Id(m);
+                string bit = $"(h{m.Bit / 32} >> {m.Bit % 32}) & 1u";
                 switch (v.Kind)
                 {
                     case WireKind.String:
@@ -244,19 +243,20 @@ namespace Tessera.Generator
                     case WireKind.Object:
                     case WireKind.SharedStruct:
                         // refs lists the present offsets from the top down, so it ends up ascending.
-                        _w.Line($"{{ int x = e - 4; TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, x), at - x, r{id}); refs[nr - 1] = x; int k = (int)TesseraWriter.Bit(r{id} != 0); nr -= k; e -= k << 2; }}");
+                        _w.Line($"{{ nint x = e - 4; TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, x), at - (int)x, r{id}); refs[nr - 1] = (int)x; uint k = {bit}; nr -= (int)k; e -= (nint)(k << 2); }}");
                         break;
                     case WireKind.Union:
-                        _w.Line($"{{ int x = e - 8; Unsafe.WriteUnaligned(ref Unsafe.Add(ref o, x), t{id}); TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, x + 4), at - x - 4, r{id}); refs[nr - 1] = x + 4; int k = (int)TesseraWriter.Bit(r{id} != 0); nr -= k; e -= k << 3; }}");
+                        _w.Line($"{{ nint x = e - 8; Unsafe.WriteUnaligned(ref Unsafe.Add(ref o, x), t{id}); TesseraWriter.WriteOffset(ref Unsafe.Add(ref o, x + 4), at - (int)x - 4, r{id}); refs[nr - 1] = (int)x + 4; uint k = {bit}; nr -= (int)k; e -= (nint)(k << 3); }}");
                         break;
                     case WireKind.Struct:
                         // Structs can be large: these are stored only when present.
-                        if (v.IsNullableValueType) _w.Line($"if (s{id}.HasValue) {{ e -= {m.CellSize}; var y = s{id}.GetValueOrDefault(); Struct{v.Struct!.Index}(ref Unsafe.Add(ref o, e), in y); }}");
-                        else _w.Line($"if (p{id}) {{ e -= {m.CellSize}; Struct{v.Struct!.Index}(ref Unsafe.Add(ref o, e), in s{id}); }}");
+                        string present = $"(h{m.Bit / 32} & 0x{1u << (m.Bit % 32):X}u) != 0";
+                        if (v.IsNullableValueType) _w.Line($"if ({present}) {{ e -= {m.CellSize}; var y = {Val(m)}.GetValueOrDefault(); Struct{v.Struct!.Index}(ref Unsafe.Add(ref o, e), in y); }}");
+                        else _w.Line($"if ({present}) {{ e -= {m.CellSize}; Struct{v.Struct!.Index}(ref Unsafe.Add(ref o, e), {InArg(m)}); }}");
                         break;
                     default:
-                        string expr = v.IsNullableValueType ? $"s{id}.GetValueOrDefault()" : "s" + id;
-                        _w.Line($"Unsafe.WriteUnaligned(ref Unsafe.Add(ref o, e - {m.CellSize}), {ScalarCast(v, expr)}); e -= (int)TesseraWriter.Bit({Present(m)}) * {m.CellSize};");
+                        string expr = v.IsNullableValueType ? $"{Val(m)}.GetValueOrDefault()" : Val(m);
+                        _w.Line($"Unsafe.WriteUnaligned(ref Unsafe.Add(ref o, e - {m.CellSize}), {ScalarCast(v, expr)}); e -= {CellStep(m)};");
                         break;
                 }
             }
@@ -266,10 +266,9 @@ namespace Tessera.Generator
             int fixedEnd = 0;
             foreach (var m in o.Fixed)
             {
-                string id = Id(m);
                 string fixedAt = $"ref Unsafe.Add(ref o, {4 * words + m.FixedOffset})";
-                if (m.Value.Kind == WireKind.Struct) _w.Line($"Struct{m.Value.Struct!.Index}({fixedAt}, in s{id});");
-                else _w.Line($"Unsafe.WriteUnaligned({fixedAt}, {ScalarCast(m.Value, "s" + id)});");
+                if (m.Value.Kind == WireKind.Struct) _w.Line($"Struct{m.Value.Struct!.Index}({fixedAt}, {InArg(m)});");
+                else _w.Line($"Unsafe.WriteUnaligned({fixedAt}, {ScalarCast(m.Value, Val(m))});");
                 fixedEnd = m.FixedOffset + m.CellSize;
             }
 
@@ -356,16 +355,53 @@ namespace Tessera.Generator
 
         private static string KeepOrDefault(MemberModel m) => m.KeepDefault ? "true" : "w.WriteDefaults";
 
+        /// <summary>A member's value: the member itself when it is read in place, or the local its getter was read into.</summary>
+        private static string Val(MemberModel m) => m.ReadInPlace ? "v." + m.CsName : "s" + Id(m);
+
+        /// <summary>A struct member as an <c>in</c> argument: by reference, except a property's value (passed as a copy).</summary>
+        private static string InArg(MemberModel m) => (m.ReadInPlace && m.IsProperty ? "" : "in ") + Val(m);
+
+        /// <summary>Whether a cell is stored, before <see cref="TesseraOptions.WriteDefaults"/> (applied per header word).</summary>
         private static string Present(MemberModel m)
         {
-            string id = Id(m);
             var v = m.Value;
-            if (WireFormat.IsReference(v.Kind)) return $"r{id} != 0";
-            if (v.IsNullableValueType) return $"s{id}.HasValue";
-            return "p" + id;
+            if (WireFormat.IsReference(v.Kind)) return $"r{Id(m)} != 0";
+            if (v.IsNullableValueType) return Val(m) + ".HasValue";
+            if (m.KeepDefault) return "true";
+            if (v.Kind == WireKind.Struct) return $"!IsDefault{v.Struct!.Index}({InArg(m)})";
+            return NotDefault(Val(m), m);
         }
 
-        /// <summary>True when the member's presence depends on <see cref="TesseraOptions.WriteDefaults"/> (the local <c>wd</c>).</summary>
+        /// <summary>
+        /// A bool's two header bits, present and value, before <see cref="TesseraOptions.WriteDefaults"/> (applied per
+        /// word). The value bit is 0 whenever the bool is absent.
+        /// </summary>
+        private static string BoolBits(MemberModel m)
+        {
+            string x = Val(m);
+            if (m.Value.IsNullableValueType) return $"(TesseraWriter.Bit({x}.HasValue) | TesseraWriter.Bit({x}.GetValueOrDefault()) << 1)";
+            if (m.KeepDefault) return $"(1u | TesseraWriter.Bit({x}) << 1)";
+            // Default false: present exactly when true. Default true: present when false (value 0), or when every
+            // member is written (wd), with its value.
+            if (BoolLiteral(m) == "false") return $"TesseraWriter.Bit({x}) * 3u";
+            return $"(TesseraWriter.Bit(!{x}) | (TesseraWriter.Bit({x}) & wd) << 1)";
+        }
+
+        /// <summary>A cell's size when its header bit is set and 0 when not, as a nint, without a branch.</summary>
+        private static string CellStep(MemberModel m)
+        {
+            string h = "h" + (m.Bit / 32);
+            int bit = m.Bit % 32, size = m.CellSize;
+            string masked = $"({h} & 0x{1u << bit:X}u)";
+            if ((size & (size - 1)) != 0) return $"(nint)(({h} >> {bit}) & 1u) * {size}";
+            int log = 0;
+            while (1 << log < size) log++;
+            if (bit > log) return $"(nint)({masked} >> {bit - log})";
+            if (bit < log) return $"(nint)({masked} << {log - bit})";
+            return $"(nint){masked}";
+        }
+
+        /// <summary>True when the member is left out when it equals its default, unless <see cref="TesseraOptions.WriteDefaults"/> (the mask <c>wd</c>).</summary>
         private static bool UsesWriteDefaults(MemberModel m) =>
             !m.KeepDefault && !m.IsFixed && !m.Value.IsNullableValueType && !WireFormat.IsReference(m.Value.Kind);
 

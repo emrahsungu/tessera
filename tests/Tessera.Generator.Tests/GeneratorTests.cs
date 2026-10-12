@@ -189,7 +189,7 @@ public class GeneratorTests
         AssertCompilesCleanly(r);
         Assert.Equal(new[] { "Models.tessera.hpp", "game/Faction.tessera.hpp", "game/Item.tessera.hpp", "game/Monster.tessera.hpp", "game/Potion.tessera.hpp", "game/Vec3.tessera.hpp", "game/Weapon.tessera.hpp" },
             r.Files.Select(f => f.Path).Where(p => !p.StartsWith("tessera_", StringComparison.Ordinal)).OrderBy(p => p, StringComparer.Ordinal));
-        Assert.Contains("s_Hp != (100)", r.Writers);   // the initializer is the default
+        Assert.Contains("v.Hp != (100)", r.Writers);   // the initializer is the default
 
         var models = r.Load();
         var monster = models.GetType("Game.Monster")!;
@@ -283,13 +283,13 @@ public class GeneratorTests
         Assert.Equal("TESSERA011", d.Id);
         Assert.Equal(DiagnosticSeverity.Warning, d.Severity);
         Assert.Contains("'Plain' generates no code for (Stats)", d.GetMessage());   // Tag has no scalar members, so no defaults
-        Assert.Contains("s_Hp != 0", r.Writers);
+        Assert.Contains("v.Hp != 0", r.Writers);
 
         // When that project serializes Stats, its generator records the initializers.
         var models = GeneratorHarness.CompileLibrary("Plain", plain + " public static class Save { public static byte[] Write(Stats s) => TesseraSerializer.Serialize(s); }", generate: true);
         var ok = Run(Unit, null, models);
         Assert.Empty(ok.Diagnostics);
-        Assert.Contains("s_Hp != (100)", ok.Writers);
+        Assert.Contains("v.Hp != (100)", ok.Writers);
 
         // [DefaultValue] is visible in metadata.
         var attributed = GeneratorHarness.CompileLibrary("Plain", plain.Replace("public short Hp = 100;", "[DefaultValue((short)100)] public short Hp = 100;"));
@@ -298,7 +298,7 @@ public class GeneratorTests
         // A project reference that carries the other project's source (as in an IDE) is still another assembly.
         var fromSource = GeneratorHarness.Run(Usings + Unit, GeneratorHarness.CompilationReference("Plain", plain));
         Assert.Equal("TESSERA011", Assert.Single(fromSource.Diagnostics).Id);
-        Assert.Contains("s_Hp != 0", fromSource.Writers);
+        Assert.Contains("v.Hp != 0", fromSource.Writers);
     }
 
     [Fact]
@@ -675,10 +675,10 @@ public class GeneratorTests
         var lib = GeneratorHarness.CompileLibrary("Shared", SharedSource, generate: true);
         var r = Run(UsesShared, null, lib);
         // The writers compare against the initializer defaults, which only the other assembly's source shows.
-        Assert.Contains("s_Level != (5)", r.Writers);
-        Assert.Contains("(byte)s_Rarity != (1)", r.Writers);
-        Assert.Contains($"SingleToInt32Bits(s_Scale) != {BitConverter.SingleToInt32Bits(1.5f)}", r.Writers);
-        Assert.Contains("s_Amount != (10)", r.Writers);
+        Assert.Contains("v.Level != (5)", r.Writers);
+        Assert.Contains("(byte)v.Rarity != (1)", r.Writers);
+        Assert.Contains($"SingleToInt32Bits(v.Scale) != {BitConverter.SingleToInt32Bits(1.5f)}", r.Writers);
+        Assert.Contains("v.Amount != (10)", r.Writers);
 
         // Gold is a member of the Reward union although it is declared in the other assembly.
         var models = r.Load();
