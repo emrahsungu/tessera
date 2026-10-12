@@ -1,8 +1,9 @@
 # Tessera documentation
 
-Tessera saves .NET objects as binary data that C++ reads directly, without parsing or copying. During compilation, a
-source generator writes two things for each of your classes: a C# serializer, which turns objects into bytes, and a
-C++ header with an accessor class, which reads the fields straight from those bytes.
+Tessera saves .NET objects as binary data that C++ and .NET read directly, without parsing or copying. During
+compilation, a source generator writes, for each of your classes: a C# serializer, which turns objects into bytes; a
+C# read type and a C++ header with an accessor class, which read the fields straight from those bytes; and the C# code
+that creates the objects again.
 
 The [README](../README.md) is the short tour; these pages explain everything.
 
@@ -18,9 +19,10 @@ Read these in order the first time:
    dictionaries, structs, and fields declared as a base class or interface.
 5. [Writing in C#](guide/writing.md): the three ways to save, and the options.
 6. [Reading in C++](guide/reading-cpp.md): opening a buffer, validating it, reading fields, and errors.
-7. [Changing your classes](guide/versioning.md): which changes keep data saved earlier readable.
-8. [Classes in several projects](guide/multiple-projects.md): when your types are spread over several assemblies.
-9. [MSBuild settings](guide/msbuild.md): where the C++ headers go, and how things are named in C++.
+7. [Reading in .NET](guide/reading-dotnet.md): reading a buffer in place, or creating the objects again.
+8. [Changing your classes](guide/versioning.md): which changes keep data saved earlier readable.
+9. [Classes in several projects](guide/multiple-projects.md): when your types are spread over several assemblies.
+10. [MSBuild settings](guide/msbuild.md): where the C++ headers go, and how things are named in C++.
 
 ## Options
 
@@ -31,11 +33,12 @@ Every option, with what it does and every case to use it in:
   [`MaxDepth`](options/max-depth.md).
 - [Reading in C++](options/cpp-read-options.md): validation, the UTF-8 check, nesting and size limits, and reading
   your own data without checks.
+- [Reading in .NET](options/dotnet-read-options.md): the same, for the read types and `Deserialize`.
 
 ## Reference
 
 - [Attributes](attributes/README.md): every attribute, what it does and when to use it.
-- [C# API](api/csharp.md): every public class and method of the .NET library.
+- [C# API](api/csharp.md): every public class and method of the .NET library, and the generated read types.
 - [C++ API](api/cpp.md): `Reader`, accessor classes, lists, dictionaries, errors.
 - [Compiler messages](diagnostics/README.md): every `TESSERA` error and warning, what causes it, and how to fix it.
 - [Binary format](FORMAT.md): the exact byte layout.

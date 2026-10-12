@@ -49,6 +49,74 @@ used again: copy or send it before the next `Write`.
 All three throw `ArgumentNullException` for a null value, and `TesseraException` when no serializer was generated for
 `T`, the data nests deeper than `MaxDepth` (or has a cycle), or the buffer would exceed 2 GB.
 
+## `TesseraSerializer`: creating objects from a buffer
+
+### `Deserialize<T>(ReadOnlySpan<byte> buffer, TesseraReadOptions? options = null)` → `T`
+
+Checks the buffer (unless the options say otherwise), then creates the `T` it holds, with all its objects, lists,
+dictionaries and strings.
+
+```csharp
+Monster orc = TesseraSerializer.Deserialize<Monster>(File.ReadAllBytes("monster.bin"));
+```
+
+**Use it** when you need your own classes back: to change the data, to keep it after the buffer is gone, or to pass it
+to code that expects your classes. To read without creating objects, use the generated
+[read types](#generated-read-types) instead. How objects, members and collections are created:
+[Reading in .NET](../guide/reading-dotnet.md#create-objects).
+
+Throws `TesseraReadException` when the buffer cannot be read (its `Error` says why), and `TesseraException` when no
+code was generated for `T`, or when a member's declared collection type cannot be created.
+
+### `TryDeserialize<T>(ReadOnlySpan<byte> buffer, out T? value, out TesseraReadError error, TesseraReadOptions? options = null)` → `bool`
+
+Like `Deserialize`, but returns `false` and the reason instead of throwing when the buffer cannot be read.
+
+```csharp
+if (!TesseraSerializer.TryDeserialize(buffer, out Monster? orc, out TesseraReadError error))
+    log.Warn("skipped a damaged save: " + TesseraReadException.Describe(error));
+```
+
+**Use it** for input that is expected to be damaged at times (user files, network data), where an exception per bad
+buffer would be costly or noisy.
+
+## Generated read types
+
+For each class, the generator writes a read type named after it (`MonsterView` for `Monster`), in the same namespace;
+for classes of other assemblies, in the namespace `Tessera.Generated.<AssemblyName>`. It reads the fields where they
+are stored in a buffer, without copying it: [Reading in .NET](../guide/reading-dotnet.md#read-in-place).
+
+| Member | What it does |
+|---|---|
+| `static MonsterView Read(ReadOnlySpan<byte> buffer, TesseraReadOptions? options = null)` | checks the buffer and returns the object at its top; throws `TesseraReadException` when it cannot be read |
+| `static bool TryRead(ReadOnlySpan<byte> buffer, out MonsterView value, out TesseraReadError error, TesseraReadOptions? options = null)` | the same, returning `false` and the reason instead of throwing |
+| a property per field (`Name`, `Hp`, `Weapons`) | the field's value: [what each field reads as](../guide/reading-dotnet.md#what-each-field-reads-as) |
+| `NameUtf8` (for each string field) | the string's UTF-8 bytes, without decoding them |
+| `HasName` (for each field) | whether the field was stored |
+| `IsNull` | whether the object is missing (its field was null): its fields then read as their defaults |
+
+Lists of objects, dictionaries and fields declared as a base class or interface get generated read types too
+(`WeaponViewList`, `StringInt32Map`, `ItemView`); lists of numbers read as `ReadOnlySpan<T>`, and three list types come
+from the library:
+
+| Type | For | Members |
+|---|---|---|
+| `TesseraStringList` | lists of strings | `Count`, `this[i]` (a `string?`), `GetUtf8(i)`, `IsNull(i)`, `foreach` |
+| `TesseraNullableList<T>` | lists of nullable values (`List<int?>`) | `Count`, `this[i]` (a `T?`), `foreach` |
+| `TesseraSpanList<T>` | lists of lists of numbers (`List<int[]>`) | `Count`, `this[i]` (a `ReadOnlySpan<T>`), `IsNull(i)`, `foreach` |
+
+## `TesseraReadOptions`
+
+The read options, an immutable record: `Verify` (default `true`), `ValidateUtf8` (`false`), `MaxDepth` (128) and
+`MaxItems` (16,777,216). `TesseraReadOptions.Default` holds the defaults; `TesseraReadOptions.Trusted` turns off the
+check, for data your own program wrote. See [.NET read options](../options/dotnet-read-options.md).
+
+## `TesseraReadException` and `TesseraReadError`
+
+`TesseraReadException` is thrown by `Read` and `Deserialize` when a buffer cannot be read. Its `Error` is a
+`TesseraReadError`, which `TryRead` and `TryDeserialize` return directly; `TesseraReadException.Describe(error)` gives a
+sentence for each. The values: [Errors](../guide/reading-dotnet.md#errors).
+
 ## `TesseraWriter`: a reusable writer
 
 A writer holds the memory a buffer is built in. It grows as needed, and keeps its memory for the next buffer.
@@ -76,7 +144,7 @@ The write options: see [Options](../options/README.md). `TesseraOptions.Default`
 
 ## `TesseraException`
 
-Thrown when saving can't succeed:
+Thrown when saving, or creating objects, can't succeed:
 
 | Message | Cause |
 |---|---|
@@ -84,6 +152,10 @@ Thrown when saving can't succeed:
 | The data nests deeper than MaxDepth ... | the data nests deeper than [`MaxDepth`](../options/max-depth.md), or contains a cycle |
 | Buffer exceeds the 2 GB limit. | the buffer would be larger than a .NET array can be |
 | Too many types in one buffer. | the data uses more than 65,534 different types |
+| No deserializer was generated for `T` ... | as for serializers: the message names the fix |
+| Deserialize cannot create a ... | a member is declared as a collection type that has neither a constructor without parameters and an `Add` method, nor a constructor taking its items |
+
+`TesseraReadException`, thrown for buffers that cannot be read, derives from `TesseraException`.
 
 ## `TesseraCppHeaders`: the C++ headers, from code
 
@@ -104,14 +176,15 @@ TesseraCppHeaders.Export(typeof(Monster).Assembly, "Engine/Generated");
 
 ## `TesseraModel<T>`: is there a serializer?
 
-`TesseraModel<T>.Write` is the generated serializer for `T`, or null if none was generated. Check it at startup to
-fail early, for example in code that serializes through generics:
+`TesseraModel<T>.Write` is the generated serializer for `T`, or null if none was generated, and
+`TesseraModel<T>.Read` the code that creates a `T` from a buffer. Check them at startup to fail early, for example in
+code that serializes through generics:
 
 ```csharp
 if (TesseraModel<SaveGame>.Write is null) throw new InvalidOperationException("SaveGame has no serializer");
 ```
 
-`TesseraModel<T>.Register` is called by the generated code; don't call it yourself.
+`TesseraModel<T>.Register` and `RegisterRead` are called by the generated code; don't call them yourself.
 
 ## `TesseraMapKeys`: dictionary key order
 
@@ -124,6 +197,7 @@ C++ sees in `keys()`. `SortUtf8` and `Sort` are used by the generated code.
 
 ## Types for the generated code
 
-`TesseraWriteFunc<T>`, `TesseraType`, and the attributes `TesseraDefault`, `TesseraDeclared` and `TesseraCppHeader`
+`TesseraWriteFunc<T>`, `TesseraType`, `TesseraReader`, `TesseraVerifier`, `TesseraVerifyFunc`, `TesseraDeserializer`,
+`TesseraDeserializeFunc<T>`, and the attributes `TesseraDefault`, `TesseraDeclared` and `TesseraCppHeader`
 ([generated attributes](../attributes/generated.md)) are public because the generated code uses them. You don't need
-them.
+them, and they may change between versions.

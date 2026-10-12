@@ -12,8 +12,10 @@ version of the classes matches fields by those name hashes, once, and converts t
 reads at full speed.
 
 - A field the reader doesn't know is skipped.
-- A field the buffer doesn't contain reads as missing: `has_x()` is false, and its value is the default compiled into
-  the reader.
+- A field the buffer doesn't contain reads as missing: `has_x()` in C++ (`HasX` in .NET) is false, and its value is
+  the default compiled into the reader; `Deserialize` sets the field to its declared default.
+
+C++ and .NET readers work the same way.
 
 ## What saved data depends on
 
@@ -38,8 +40,8 @@ The default value is the one that is easy to miss. If a field's default may chan
 - **Rename a field**, keeping its saved name: `[TesseraName("OldName")]`.
 - **Rename a class**, keeping its saved name: `[Tessera("OldName")]` (only matters for classes stored in fields
   declared as a base class or interface).
-- **Add derived classes.** Older programs see an unknown class: `type()` returns a value outside their enum, and every
-  `as_x()` is empty.
+- **Add derived classes.** Older programs see an unknown class: `type()` (`Tag` in .NET) returns a value outside their
+  enum, and every `as_x()` (`AsX`) is empty; `Deserialize` sets such a field to null.
 - **Change a field's type** only knowingly: it becomes a different field, and the other version reads it as missing.
   A dictionary whose value type changes keeps its keys but has no values in the other version; one whose key type
   changes is empty there.
@@ -47,7 +49,8 @@ The default value is the one that is easy to miss. If a field's default may chan
 ## Without the description
 
 With [`IncludeSchema = false`](../options/include-schema.md), buffers carry no description of their classes. A reader
-then accepts only buffers whose layout hash matches its own, and refuses others with `Error::SchemaMismatch`.
+then accepts only buffers whose layout hash matches its own, and refuses others with `Error::SchemaMismatch`
+(`TesseraReadError.SchemaMismatch` in .NET).
 Reordering fields still works (it doesn't change the layout); adding or removing fields breaks older data.
 
 ## What it costs
@@ -59,8 +62,10 @@ actual layouts; it never trusts the hashes in the buffer for safety.
 
 ## Tested both ways
 
-The tests read old data with new code and new data with old code, with MSVC, GCC and Clang: the class versions are in
-[tests/Tessera.Tests/Evolution.cs](../../tests/Tessera.Tests/Evolution.cs), the checks in
-[tests/cpp/interop_test.cpp](../../tests/cpp/interop_test.cpp).
+The tests read old data with new code and new data with old code, with MSVC, GCC and Clang, and in .NET: the class
+versions are in [tests/Tessera.Tests/Evolution.cs](../../tests/Tessera.Tests/Evolution.cs), the checks in
+[tests/cpp/interop_test.cpp](../../tests/cpp/interop_test.cpp),
+[tests/Tessera.Tests/ReaderVersionTests.cs](../../tests/Tessera.Tests/ReaderVersionTests.cs) and
+[tests/Tessera.Tests/DeserializeTests.cs](../../tests/Tessera.Tests/DeserializeTests.cs).
 
 Next: [Classes in several projects](multiple-projects.md).

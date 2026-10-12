@@ -120,4 +120,4 @@ The [C++ API](../api/cpp.md#tesseraerror) describes each one.
 std::cout << tessera::to_json(orc) << '\n';
 ```
 
-Next: [Changing your classes](versioning.md).
+Next: [Reading in .NET](reading-dotnet.md).

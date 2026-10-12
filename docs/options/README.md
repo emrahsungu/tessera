@@ -28,3 +28,8 @@ TesseraOptions fast = TesseraOptions.Default with { Sharing = Sharing.None };
 
 [C++ read options](cpp-read-options.md): whether to validate a buffer before reading it, whether to check that strings
 are valid UTF-8, limits on nesting and object count, and how to skip validation for data your own program wrote.
+
+## Reading in .NET
+
+[.NET read options](dotnet-read-options.md): the same choices for the generated read types (`MonsterView.Read`) and
+`TesseraSerializer.Deserialize`, through a `TesseraReadOptions`.
