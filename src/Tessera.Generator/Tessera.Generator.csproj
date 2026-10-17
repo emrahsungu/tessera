@@ -7,7 +7,7 @@
     <RootNamespace>Tessera.Generator</RootNamespace>
     <NoWarn>$(NoWarn);RS2008</NoWarn>
     <Description>Tessera source generator: emits allocation-free writers for the models of a project and the matching C++ view headers.</Description>
-    <!-- Shipped inside the Tessera package (analyzers/dotnet/cs), see src/Tessera/Tessera.csproj. -->
+    <!-- Shipped inside the Tessera.Serialization package (analyzers/dotnet/cs), see src/Tessera/Tessera.csproj. -->
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 

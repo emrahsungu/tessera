@@ -142,9 +142,9 @@ public static class TesseraSerializer
 
     internal static void CountRegistration() => Interlocked.Increment(ref s_registered);
 
-    private const string AddGenerator = "reference the Tessera package; inside the Tessera repository, import src/Tessera.ProjectReference.targets " +
-        "instead of referencing src/Tessera. The generator runs only as an analyzer, which a project reference does not pass on, so such a " +
-        "project gets the library alone.";
+    private const string AddGenerator = "reference the Tessera.Serialization package; inside the Tessera repository, import " +
+        "src/Tessera.ProjectReference.targets instead of referencing src/Tessera. The generator runs only as an analyzer, which a project " +
+        "reference does not pass on, so such a project gets the library alone.";
 
     private static TesseraException NoWriter(Type type) => new(Volatile.Read(ref s_registered) == 0
         ? $"No serializer was generated for {type}, and no Tessera serializers are loaded at all: the source generator (Tessera.Generator) did " +

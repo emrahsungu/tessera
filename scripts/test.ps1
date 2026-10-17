@@ -88,7 +88,7 @@ if ($Package) {
     <TesseraCppHeaderName>Quickstart.tessera.hpp</TesseraCppHeaderName>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Tessera" Version="$version" />
+    <PackageReference Include="Tessera.Serialization" Version="$version" />
   </ItemGroup>
 </Project>
 "@

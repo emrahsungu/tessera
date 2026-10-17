@@ -9,7 +9,7 @@
     <TesseraCppOutputDir>cpp/generated</TesseraCppOutputDir>
   </PropertyGroup>
 
-  <!-- Outside this repository use the package instead: <PackageReference Include="Tessera" Version="0.1.0-preview" /> -->
+  <!-- Outside this repository use the package instead: <PackageReference Include="Tessera.Serialization" Version="0.1.0-preview" /> -->
   <Import Project="..\..\src\Tessera.ProjectReference.targets" />
 
 </Project>

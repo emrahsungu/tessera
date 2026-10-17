@@ -7,7 +7,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <RootNamespace>Tessera</RootNamespace>
     <Description>Zero-copy binary buffers from plain .NET models, read in place from C++ through generated headers. Includes the source generator, the header export step and the C++ runtime headers.</Description>
-    <PackageId>Tessera</PackageId>
+    <PackageId>Tessera.Serialization</PackageId>
     <PackageTags>serialization;binary;zero-copy;cpp;interop;source-generator;flatbuffers;messagepack</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
@@ -19,8 +19,9 @@
 
   <!--
     One package carries everything: the runtime (lib/), the source generator (analyzers/), the header export tool
-    (tools/), the C++ runtime headers (include/) and the MSBuild glue (build/). The two projects below are built
-    first but are not package dependencies.
+    (tools/), the C++ runtime headers (include/) and the MSBuild glue (build/, named after the package ID: NuGet
+    imports only build/<package ID>.props and .targets). The two projects below are built first but are not package
+    dependencies.
   -->
   <ItemGroup>
     <ProjectReference Include="..\Tessera.Generator\Tessera.Generator.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
@@ -28,7 +29,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="build\Tessera.props;build\Tessera.targets" Pack="true" PackagePath="build" />
+    <None Include="build\Tessera.Serialization.props;build\Tessera.Serialization.targets" Pack="true" PackagePath="build" />
     <None Include="..\Tessera.Generator\bin\$(Configuration)\netstandard2.0\Tessera.Generator.dll" Pack="true" PackagePath="analyzers\dotnet\cs" Visible="false" />
     <None Include="..\Tessera.Cpp\bin\$(Configuration)\net8.0\Tessera.Cpp.dll;..\Tessera.Cpp\bin\$(Configuration)\net8.0\Tessera.Cpp.runtimeconfig.json;..\Tessera.Cpp\bin\$(Configuration)\net8.0\Tessera.Cpp.deps.json" Pack="true" PackagePath="tools\net8.0" Visible="false" />
     <None Include="..\..\cpp\include\tessera\tessera.hpp;..\..\cpp\include\tessera\tessera_reader.hpp" Pack="true" PackagePath="include\tessera" Visible="false" />

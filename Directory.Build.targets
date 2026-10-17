@@ -4,7 +4,7 @@
     generator, which writes every model's serializer at compile time, runs only as an analyzer, and a project reference
     does not pass analyzers on: the project compiles, but Serialize throws "No writer was generated" at run time.
     src/Tessera.ProjectReference.targets adds the runtime, the generator and the package's build settings, as the
-    Tessera package does. A project that references the generator in any way (its tests do) is left alone.
+    Tessera.Serialization package does. A project that references the generator in any way (its tests do) is left alone.
   -->
   <Target Name="TesseraCheckGeneratorReference" BeforeTargets="CoreCompile">
     <ItemGroup>
@@ -17,6 +17,6 @@
     </PropertyGroup>
     <Warning Code="TESSERA015" Condition="'@(_TesseraRuntimeReference)' != '' and '@(_TesseraGeneratorReference)' == ''"
              HelpLink="https://github.com/emrahsungu/tessera/blob/main/docs/diagnostics/TESSERA015.md"
-             Text="This project references src/Tessera without Tessera's source generator, so no serializers are generated and Serialize will throw. The generator runs only as an analyzer, which a project reference does not pass on. Replace the reference with &lt;Import Project=&quot;$(_TesseraImport)&quot; /&gt; at the end of the project file (as samples/Quickstart does), or reference the Tessera package." />
+             Text="This project references src/Tessera without Tessera's source generator, so no serializers are generated and Serialize will throw. The generator runs only as an analyzer, which a project reference does not pass on. Replace the reference with &lt;Import Project=&quot;$(_TesseraImport)&quot; /&gt; at the end of the project file (as samples/Quickstart does), or reference the Tessera.Serialization package." />
   </Target>
 </Project>

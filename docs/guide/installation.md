@@ -1,6 +1,6 @@
 # Installation
 
-Tessera is one NuGet package with four parts:
+Tessera is one NuGet package, `Tessera.Serialization`, with four parts:
 
 - the .NET library you call (`TesseraSerializer`, the attributes);
 - a **source generator**: code that runs inside the C# compiler and writes a serializer for each of your classes;
@@ -31,7 +31,7 @@ Reference the package, and choose where the C++ headers go:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Tessera" Version="0.1.0-preview" />
+  <PackageReference Include="Tessera.Serialization" Version="0.1.0-preview" />
 </ItemGroup>
 <PropertyGroup>
   <!-- After each build, the generated headers and the C++ library are written here. -->
@@ -40,10 +40,12 @@ Reference the package, and choose where the C++ headers go:
 ```
 
 That's all: the package brings the source generator along, so every build generates the serializers and the C++
-headers. Without `TesseraCppOutputDir`, no headers are written to disk (they stay inside the compiled assembly).
+headers. Without `TesseraCppOutputDir`, no headers are written to disk (they stay inside the compiled assembly). In
+code, the namespace is `Tessera` (`using Tessera;`).
 
 NuGet caches packages by version number. If you rebuild the package without changing its version, delete
-`~/.nuget/packages/tessera` (`%USERPROFILE%\.nuget\packages\tessera` on Windows), or restore keeps the old copy.
+`~/.nuget/packages/tessera.serialization` (`%USERPROFILE%\.nuget\packages\tessera.serialization` on Windows), or
+restore keeps the old copy.
 
 ## B. This repository's projects, in your solution
 
@@ -82,7 +84,7 @@ If you'd rather write the references yourself:
 ```
 
 That gives you the serializers, but writes no C++ headers to disk: that takes `src/Tessera.Cpp` and the package's
-`build/Tessera.props` and `build/Tessera.targets`, which the import line adds.
+`build/Tessera.Serialization.props` and `build/Tessera.Serialization.targets`, which the import line adds.
 
 ## Requirements
 
