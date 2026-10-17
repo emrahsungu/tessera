@@ -13,6 +13,10 @@
 </p>
 
 <p align="center">
+  <a href="https://www.nuget.org/packages/Tessera.Serialization"><img alt="NuGet" src="https://img.shields.io/nuget/vpre/Tessera.Serialization"></a>
+</p>
+
+<p align="center">
   <a href="docs/README.md">Documentation</a> ·
   <a href="docs/guide/installation.md">Installation</a> ·
   <a href="docs/attributes/README.md">Attributes</a> ·
@@ -151,19 +155,16 @@ byte[] small = TesseraSerializer.Serialize(orc, new TesseraOptions { IncludeSche
 
 ## 2. Getting started
 
-The package, `Tessera.Serialization`, is not on nuget.org yet, so build it once:
+Add the package from [nuget.org](https://www.nuget.org/packages/Tessera.Serialization) (`--prerelease`, because every
+version so far is a preview):
 
 ```shell
-dotnet pack src/Tessera -c Release -o artifacts
+dotnet add package Tessera.Serialization --prerelease
 ```
 
-Add `artifacts` as a package source in your `nuget.config`, reference the package, and choose where the C++ headers
-go:
+Then choose where the C++ headers go, in your project file:
 
 ```xml
-<ItemGroup>
-  <PackageReference Include="Tessera.Serialization" Version="0.1.0-preview" />
-</ItemGroup>
 <PropertyGroup>
   <!-- After each build, the generated headers and the C++ runtime headers are written here. -->
   <TesseraCppOutputDir>cpp/generated</TesseraCppOutputDir>
@@ -174,11 +175,9 @@ In C++, add that folder to the include path. `game/Monster.tessera.hpp` includes
 named after the assembly (`<AssemblyName>.tessera.hpp`) includes every model type. The runtime is header-only C++20.
 Buffers must start at an 8-byte aligned address, as memory from `new`, `malloc` or a `std::vector<std::uint64_t>` does.
 
-NuGet caches packages by version: after repacking the same version, delete `~/.nuget/packages/tessera.serialization`.
-
-To use this repository's projects in your solution instead of the package, see
-[Installation](docs/guide/installation.md#b-this-repositorys-projects-in-your-solution); the
-[documentation](docs/README.md) covers every attribute, option and diagnostic.
+To build the package from source, or to use this repository's projects in your solution instead of the package, see
+[Installation](docs/guide/installation.md); the [documentation](docs/README.md) covers every attribute, option and
+diagnostic.
 
 ## 3. Why Tessera
 
@@ -561,5 +560,6 @@ Tessera is released under the [Apache License 2.0](LICENSE).
 
 ## Status
 
-Tessera is a preview (0.1.0-preview, wire format version 2). The API and the wire format may change before 1.0; readers
-reject buffers of other format versions. The package is not published to nuget.org yet.
+Tessera is a preview: [Tessera.Serialization 0.1.0-preview](https://www.nuget.org/packages/Tessera.Serialization) on
+nuget.org, wire format version 2. The API and the wire format may change before 1.0; readers reject buffers of other
+format versions.

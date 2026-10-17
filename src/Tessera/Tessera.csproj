@@ -6,7 +6,7 @@
     <IsAotCompatible>true</IsAotCompatible>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <RootNamespace>Tessera</RootNamespace>
-    <Description>Zero-copy binary buffers from plain .NET models, read in place from C++ through generated headers. Includes the source generator, the header export step and the C++ runtime headers.</Description>
+    <Description>Zero-copy binary buffers from plain .NET objects, read in place by C++20 (through generated headers) and .NET. Includes the source generator, the C++ header export step and the C++ runtime headers.</Description>
     <PackageId>Tessera.Serialization</PackageId>
     <PackageTags>serialization;binary;zero-copy;cpp;interop;source-generator;flatbuffers;messagepack</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
@@ -33,7 +33,9 @@
     <None Include="..\Tessera.Generator\bin\$(Configuration)\netstandard2.0\Tessera.Generator.dll" Pack="true" PackagePath="analyzers\dotnet\cs" Visible="false" />
     <None Include="..\Tessera.Cpp\bin\$(Configuration)\net8.0\Tessera.Cpp.dll;..\Tessera.Cpp\bin\$(Configuration)\net8.0\Tessera.Cpp.runtimeconfig.json;..\Tessera.Cpp\bin\$(Configuration)\net8.0\Tessera.Cpp.deps.json" Pack="true" PackagePath="tools\net8.0" Visible="false" />
     <None Include="..\..\cpp\include\tessera\tessera.hpp;..\..\cpp\include\tessera\tessera_reader.hpp" Pack="true" PackagePath="include\tessera" Visible="false" />
-    <None Include="..\..\README.md;..\..\LICENSE;icon.png" Pack="true" PackagePath="\" Visible="false" />
+    <!-- nuget.org shows a README's HTML as text and drops its relative links, so the package has a README of its own. -->
+    <None Include="PACKAGE.md" Pack="true" PackagePath="README.md" Visible="false" />
+    <None Include="..\..\LICENSE;icon.png" Pack="true" PackagePath="\" Visible="false" />
   </ItemGroup>
 
 </Project>

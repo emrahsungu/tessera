@@ -1,7 +1,7 @@
 # Getting started
 
-This page saves an object in C# and reads it in C++. The finished project is
-[samples/Quickstart](../../samples/Quickstart).
+This page saves an object in C# and reads it in C++, in a project that references the package
+([Installation](installation.md)). The finished project is [samples/Quickstart](../../samples/Quickstart).
 
 ## 1. Your classes
 

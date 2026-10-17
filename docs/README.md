@@ -11,7 +11,8 @@ The [README](../README.md) is the short tour; these pages explain everything.
 
 Read these in order the first time:
 
-1. [Installation](guide/installation.md): add the NuGet package, or use this repository's projects in your solution.
+1. [Installation](guide/installation.md): add the package from nuget.org, build it from source, or use this
+   repository's projects in your solution.
 2. [Getting started](guide/getting-started.md): save an object in C#, read it in C++.
 3. [Which types get generated code](guide/generated-types.md): which of your types Tessera generates code for, and
    when you need to mark one.

@@ -11,23 +11,15 @@ You can use the package, or reference this repository's projects directly.
 
 ## A. The NuGet package
 
-Tessera is not on nuget.org yet, so build the package once from this repository:
+Add [Tessera.Serialization](https://www.nuget.org/packages/Tessera.Serialization) from nuget.org (`--prerelease`,
+because every version so far is a preview):
 
 ```shell
-dotnet pack src/Tessera -c Release -o artifacts
+dotnet add package Tessera.Serialization --prerelease
 ```
 
-Add that folder as a package source in your `nuget.config`:
-
-```xml
-<configuration>
-  <packageSources>
-    <add key="tessera-local" value="path/to/tessera/artifacts" />
-  </packageSources>
-</configuration>
-```
-
-Reference the package, and choose where the C++ headers go:
+That adds the `PackageReference` below to your project file; you can also write it yourself. Then choose where the C++
+headers go:
 
 ```xml
 <ItemGroup>
@@ -43,9 +35,31 @@ That's all: the package brings the source generator along, so every build genera
 headers. Without `TesseraCppOutputDir`, no headers are written to disk (they stay inside the compiled assembly). In
 code, the namespace is `Tessera` (`using Tessera;`).
 
-NuGet caches packages by version number. If you rebuild the package without changing its version, delete
-`~/.nuget/packages/tessera.serialization` (`%USERPROFILE%\.nuget\packages\tessera.serialization` on Windows), or
-restore keeps the old copy.
+### Building the package from source
+
+To use changes that are not on nuget.org yet, build the package from this repository:
+
+```shell
+dotnet pack src/Tessera -c Release -o artifacts
+```
+
+Add that folder as a package source in your `nuget.config`:
+
+```xml
+<configuration>
+  <packageSources>
+    <add key="tessera-local" value="path/to/tessera/artifacts" />
+  </packageSources>
+</configuration>
+```
+
+Then reference the version that `dotnet pack` built: it is part of the file name,
+`Tessera.Serialization.<version>.nupkg`.
+
+NuGet caches packages by version number and takes a version from that cache before looking at any package source. If
+the cache already holds the version you built (from nuget.org or an earlier build), delete
+`~/.nuget/packages/tessera.serialization/<version>` (`%USERPROFILE%\.nuget\packages\tessera.serialization\<version>`
+on Windows), or restore keeps the old copy.
 
 ## B. This repository's projects, in your solution
 
