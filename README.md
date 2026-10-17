@@ -560,6 +560,5 @@ Tessera is released under the [Apache License 2.0](LICENSE).
 
 ## Status
 
-Tessera is a preview: [Tessera.Serialization 0.1.0-preview](https://www.nuget.org/packages/Tessera.Serialization) on
-nuget.org, wire format version 2. The API and the wire format may change before 1.0; readers reject buffers of other
-format versions.
+Tessera is a preview: [Tessera.Serialization](https://www.nuget.org/packages/Tessera.Serialization) on nuget.org, wire
+format version 2. The API and the wire format may change before 1.0; readers reject buffers of other format versions.

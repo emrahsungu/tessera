@@ -23,7 +23,7 @@ headers go:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Tessera.Serialization" Version="0.1.0-preview" />
+  <PackageReference Include="Tessera.Serialization" Version="0.1.1-preview" />
 </ItemGroup>
 <PropertyGroup>
   <!-- After each build, the generated headers and the C++ library are written here. -->
